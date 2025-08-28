@@ -12,7 +12,7 @@ public static class Babel
 {
     public record ObfuscationTargetFramework(
         AbsolutePath OutputDirectory,
-        string[] DependencyFileNames);
+        IEnumerable<string> DependencyFileNames);
 
     public static void Obfuscate(
         Tool babel,
@@ -49,11 +49,13 @@ public static class Babel
                 var dll = outputDir / (assemblyName + ".dll");
                 var dependencies = dependencyFiles.Select(file => outputDir / (file + ".dll")).ToArray();
                 Log.Information("Obfuscating {FileName} in {Folder}. And merging with {Dependencies}",
-                    assemblyName, outputDir.Name, dependencyFiles);
+                    assemblyName, outputDir.Name, dependencies);
 
                 var args = new ArgumentStringHandler(1, 1, out _);
 
                 args.AppendFormatted(dll);
+                args.AppendLiteral(" ");
+
                 if (dependencies.Length > 0)
                 {
                     args.AppendFormatted(dependencies);

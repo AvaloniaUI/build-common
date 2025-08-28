@@ -10,7 +10,7 @@ public static class IlMerge
 {
     public record MergeTargetFramework(
         AbsolutePath OutputDirectory,
-        string[] DependencyFileNames);
+        IEnumerable<string> DependencyFileNames);
 
     public static void Merge(
         Tool ilRepack,
@@ -23,10 +23,10 @@ public static class IlMerge
     {
         foreach (var (outputDir, dependencyFiles) in targets)
         {
-            var dll = outputDir / assemblyName;
-            var dependencies = dependencyFiles.Select(file => outputDir / file);
+            var dll = outputDir / (assemblyName + ".dll");
+            var dependencies = dependencyFiles.Select(file => outputDir / (file + ".dll")).ToArray();
             Log.Information("Obfuscating {FileName} in {Folder}. And merging with {Dependencies}",
-                assemblyName, outputDir.Name, dependencyFiles);
+                assemblyName, outputDir.Name, dependencies);
 
             var args = new ArgumentStringHandler();
             if (internalize)
