@@ -5,7 +5,7 @@ namespace NukeExtensions;
 
 public static class VersionResolver
 {
-    public static SemVersion? GetGitHubVersion(Version baseVersionNumber, bool isPackingToLocalCache)
+    public static SemVersion GetGitHubVersion(Version baseVersionNumber, bool isPackingToLocalCache)
     {
         return GetVersion(
             baseVersionNumber,
@@ -14,7 +14,7 @@ public static class VersionResolver
             Environment.GetEnvironmentVariable("GITHUB_RUN_NUMBER"));
     }
 
-    public static SemVersion? GetVersion(Version baseVersionNumber, bool isPackingToLocalCache, string? refName, string? runNumber)
+    public static SemVersion GetVersion(Version baseVersionNumber, bool isPackingToLocalCache, string? refName, string? runNumber)
     {
         // Release tag
         if (SemVersion.TryParse(refName, out var tagVersion))

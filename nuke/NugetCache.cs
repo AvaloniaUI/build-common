@@ -5,6 +5,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Xml.Linq;
 using NuGet.Configuration;
+using Nuke.Common.IO;
 using Nuke.Common.Tooling;
 using Nuke.Common.Tools.DotNet;
 using Serilog;
@@ -21,7 +22,7 @@ public class NugetCache
     /// <param name="packageFiles">Collection of Nupkg files to install to the cache.</param>
     /// <param name="rootDirectory">Root directory to load nuget settings from.</param>
     public static void InstallLibraryToNuGetCache(
-        IReadOnlyList<string> packageFiles,
+        IReadOnlyCollection<AbsolutePath> packageFiles,
         string rootDirectory,
         string version = "9999.0.0-localbuild")
     {

@@ -10,5 +10,13 @@
         <PackageReference Include="Semver" Version="3.0.0"/>
     </ItemGroup>
 
+    <ItemGroup>
+        <None Include="../targets/**/*.*" LinkBase="Targets" />
+        <None Include="../branding/**/*.*" LinkBase="Branding" />
+        <None Include="../avalonia.snk" />
+        <None Include="../babel.license" />
+        <None Include="../babel.rules" />
+    </ItemGroup>
+
     <Import Project="../targets/NullableEnable.targets" />
 </Project>

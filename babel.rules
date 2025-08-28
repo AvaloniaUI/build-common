@@ -1,0 +1,83 @@
+﻿<Rules xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	version="2.0">
+
+	<Rule name="runAgent"
+		feature="agent"
+		exclude="false"
+		applyToMembers="true">
+
+		<Pattern>*</Pattern>
+		<Properties>
+			<TaskNameList>
+				Base types,
+				Dynamic language,
+				Exposed attributes,
+				Reflected strings,
+				Reflected types,
+				WinRT types,
+				XAML symbols
+			</TaskNameList>
+		</Properties>
+	</Rule>
+
+    <Rule name="DontRenameThemes"
+          feature="renaming"
+          exclude="true"
+          applyToMembers="true">
+
+        <Pattern>Avalonia.Themes.*</Pattern>
+    </Rule>
+
+    <Rule name="DontOptimizeThemes"
+          feature="optimizations"
+          exclude="true"
+          applyToMembers="true">
+
+        <Pattern>Avalonia.Themes.*</Pattern>
+    </Rule>
+
+    <Rule name="DontInternalizeThemes"
+          feature="merge"
+          exclude="false"
+          applyToMembers="true">
+
+        <Pattern>Avalonia.Themes.*</Pattern>
+        <Properties>
+            <Internalize>false</Internalize>
+        </Properties>
+        <Description>Disable Internalize Themes</Description>
+    </Rule>
+
+    <Rule name="InternalizeLicensing"
+          feature="merge"
+          exclude="false"
+          applyToMembers="true">
+
+        <Pattern>AvaloniaUI.Licensing.*</Pattern>
+        <Properties>
+            <Internalize>true</Internalize>
+        </Properties>
+    </Rule>
+
+	<Rule name="NoCompilerGenerated" 
+		feature="control flow, value encryption, string encryption" 
+		exclude="true" applyToMembers="false">
+		<Target>Classes</Target>
+		<Pattern>*</Pattern>
+		<HasAttribute onEnclosingType="false">
+			System.Runtime.CompilerServices.CompilerGeneratedAttribute,
+			System.Diagnostics.DebuggerHiddenAttribute
+		</HasAttribute>
+		<Description>Do not obfuscate compiler-generated methods.</Description>
+	</Rule>
+
+	<Rule name="DontRenameAnonymous" 
+		feature="renaming, dead code" 
+		exclude="true" 
+		applyToMembers="true">
+		<Pattern>*</Pattern>
+		<HasAttribute>System.Runtime.CompilerServices.CompilerGeneratedAttribute</HasAttribute>
+		<Description>Do not renaming Anonymous Types.</Description>
+	</Rule>
+
+</Rules>

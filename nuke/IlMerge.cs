@@ -8,14 +8,14 @@ namespace NukeExtensions;
 
 public static class IlMerge
 {
-    public record ObfuscationTargetFramework(
+    public record MergeTargetFramework(
         AbsolutePath OutputDirectory,
         string[] DependencyFileNames);
 
     public static void Merge(
         Tool ilRepack,
         string assemblyName,
-        IReadOnlyList<ObfuscationTargetFramework> targets,
+        IEnumerable<MergeTargetFramework> targets,
         bool internalize = true,
         bool renameInternalized = false,
         AbsolutePath? publicApiList = null,

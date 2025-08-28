@@ -17,10 +17,10 @@ public static class Babel
     public static void Obfuscate(
         Tool babel,
         string assemblyName,
-        IReadOnlyList<ObfuscationTargetFramework> targets,
+        IEnumerable<ObfuscationTargetFramework> targets,
         AbsolutePath? licenseFile = null,
-        AbsolutePath? rulesFile = null,
-        AbsolutePath? signKey = null)
+        AbsolutePath? signKey = null,
+        IReadOnlyCollection<AbsolutePath>? rulesFiles = null)
     {
         bool tempLicense = false;
         if (licenseFile is null)
@@ -46,22 +46,27 @@ public static class Babel
         {
             foreach (var (outputDir, dependencyFiles) in targets)
             {
-                var dll = outputDir / assemblyName;
-                var dependencies = dependencyFiles.Select(file => outputDir / file);
+                var dll = outputDir / (assemblyName + ".dll");
+                var dependencies = dependencyFiles.Select(file => outputDir / (file + ".dll")).ToArray();
                 Log.Information("Obfuscating {FileName} in {Folder}. And merging with {Dependencies}",
                     assemblyName, outputDir.Name, dependencyFiles);
 
-                var args = new ArgumentStringHandler();
+                var args = new ArgumentStringHandler(1, 1, out _);
+
+                args.AppendFormatted(dll);
+                if (dependencies.Length > 0)
+                {
+                    args.AppendFormatted(dependencies);
+                }
+
                 args.AppendLiteral(" --nologo ");
                 if (licenseFile is not null)
                 {
-                    args.AppendLiteral($" --license ");
+                    args.AppendLiteral(" --license ");
                     args.AppendFormatted(licenseFile);
                 }
 
-                args.AppendFormatted(dll);
-
-                if (rulesFile is not null)
+                foreach (var rulesFile in rulesFiles ?? [])
                 {
                     args.AppendLiteral(" --rules ");
                     args.AppendFormatted(rulesFile);
@@ -72,9 +77,6 @@ public static class Babel
                     args.AppendLiteral(" --keyfile ");
                     args.AppendFormatted(signKey);
                 }
-
-                args.AppendFormatted(dll);
-                args.AppendFormatted(dependencies);
 
                 args.AppendLiteral(" --output ");
                 args.AppendFormatted(dll);
