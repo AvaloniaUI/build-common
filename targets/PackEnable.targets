@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Authors>AvaloniaUI OÜ</Authors>
+    <Copyright>Copyright 2019-$([System.DateTime]::Now.ToString(`yyyy`)) &#169; AvaloniaUI OÜ</Copyright>
+
+    <PackageProjectUrl>https://avaloniaui.net</PackageProjectUrl>
+    <PackageIcon>icon.png</PackageIcon>
+
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <Deterministic>true</Deterministic>
+    <DebugType Condition="$(ContinuousIntegrationBuild) == 'true'">embedded</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup Label="PackageIcon">
+    <None Include="$(MSBuildThisFileDirectory)/../branding/icon.png" Pack="true" Visible="false" PackagePath=""/>
+  </ItemGroup>
+</Project>

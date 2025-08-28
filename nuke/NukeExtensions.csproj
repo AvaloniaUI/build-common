@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Nuke.Common" Version="9.0.4"/>
+        <PackageReference Include="Nuke.Tooling" Version="9.0.4" />
+        <PackageReference Include="Semver" Version="3.0.0"/>
+    </ItemGroup>
+
+    <Import Project="../targets/NullableEnable.targets" />
+</Project>
