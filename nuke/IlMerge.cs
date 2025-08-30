@@ -28,16 +28,18 @@ public static class IlMerge
             Log.Information("Obfuscating {FileName} in {Folder}. And merging with {Dependencies}",
                 assemblyName, outputDir.Name, dependencies);
 
-            var args = new ArgumentStringHandler();
+            var args = new ArgumentStringHandler(1, 1, out _);
             if (internalize)
             {
                 if (publicApiList is not null)
                 {
-                    args.AppendFormatted($"/internalize:{publicApiList}");
+                    args.AppendLiteral(" /internalize:");
+                    args.AppendFormatted(publicApiList);
+                    args.AppendLiteral(" ");
                 }
                 else
                 {
-                    args.AppendFormatted($"/internalize");
+                    args.AppendLiteral(" /internalize ");
                 }
 
                 if (renameInternalized)
@@ -49,8 +51,9 @@ public static class IlMerge
             args.AppendLiteral(" /parallel /ndebug ");
             if (signKey is not null)
             {
-                args.AppendLiteral(" /keyfile: ");
+                args.AppendLiteral(" /keyfile:");
                 args.AppendFormatted(signKey);
+                args.AppendLiteral(" ");
             }
 
             args.AppendLiteral($" /out:{dll} ");
