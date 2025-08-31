@@ -1,0 +1,171 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using NuGet.Packaging;
+using NuGet.Packaging.Core;
+using NuGet.Versioning;
+using Nuke.Common.IO;
+
+namespace NukeExtensions;
+
+public record NuGetPackageInfo(string PackageId, string Version)
+{
+    public string ProjectUrl { get; init; } = "https://avaloniaui.net/accelerate";
+    public string? Author { get; init; } = "AvaloniaUI OÜ";
+    public string? Copyright { get; init; } = $"Copyright 2019-{DateTime.Now.Year} © AvaloniaUI OÜ";
+    public string? Description { get; init; } = PackageId;
+    public AbsolutePath? Readme { get; init; }
+    public AbsolutePath? Icon { get; init; } = Statics.Icon;
+}
+
+public static class DotNetToolBuilder
+{
+    public static void BuildRuntimeSpecificPackage(
+        Stream output,
+        NuGetPackageInfo packageInfo,
+        AbsolutePath binariesDir,
+        string entryPoint,
+        string commandName)
+    {
+        var metadata = new ManifestMetadata
+        {
+            Id = packageInfo.PackageId,
+            Version = NuGetVersion.Parse(packageInfo.Version),
+            Authors = packageInfo.Author is { } author ? [author] : [],
+            Description = packageInfo.Description,
+            Copyright = packageInfo.Copyright,
+            RequireLicenseAcceptance = false,
+            Readme = packageInfo.Readme?.Name,
+            Icon = packageInfo.Icon?.Name,
+            PackageTypes =
+            [
+                new PackageType("DotnetTool", new Version(1, 0)),
+                new PackageType("DotnetToolRidPackage", new Version(1, 0))
+            ]
+        };
+        if (packageInfo.ProjectUrl is { } projectUrl)
+        {
+            metadata.SetProjectUrl(projectUrl);
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var files = new List<ManifestFile>();
+
+            var manifestFile = Path.Combine(tempDir, "DotnetToolSettings.xml");
+            Directory.CreateDirectory(Path.GetDirectoryName(manifestFile)!);
+            using (var writer = new StreamWriter(manifestFile))
+            {
+                writer.WriteLine("""<?xml version="1.0" encoding="utf-8"?>""");
+                writer.WriteLine("""<DotNetCliTool Version="1">""");
+                writer.WriteLine("""  <Commands>""");
+                writer.WriteLine($"""    <Command Name="{commandName}" EntryPoint="{entryPoint}" Runner="dotnet" />""");
+                writer.WriteLine("""  </Commands>""");
+                writer.WriteLine("""</DotNetCliTool>""");
+            }
+
+            files.Add(new ManifestFile { Source = manifestFile, Target = "tools/net6.0/any/DotnetToolSettings.xml" });
+
+            if (packageInfo.Icon is { } icon)
+            {
+                files.Add(new ManifestFile { Source = icon, Target = icon.Name });
+            }
+            if (packageInfo.Readme is { } readme)
+            {
+                files.Add(new ManifestFile { Source = readme, Target = readme.Name });
+            }
+
+            foreach (var file in binariesDir.GlobFiles("**/*"))
+            {
+                var relativePath = Path.GetRelativePath(binariesDir, file);
+                files.Add(new ManifestFile
+                {
+                    Source = file,
+                    Target = Path.Combine("tools/net6.0/any", relativePath)
+                });
+            }
+
+            var builder = new PackageBuilder();
+            builder.PopulateFiles("", files);
+            builder.Populate(metadata);
+
+            builder.Save(output);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    public static void BuildSharedPackage(
+        Stream output,
+        NuGetPackageInfo packageInfo,
+        string commandName,
+        IReadOnlyDictionary<string, string> platformPackagesPerRid)
+    {
+        var metadata = new ManifestMetadata
+        {
+            Id = packageInfo.PackageId,
+            Version = NuGetVersion.Parse(packageInfo.Version),
+            Authors = packageInfo.Author is { } author ? [author] : [],
+            Readme = packageInfo.Readme,
+            Description = packageInfo.Description,
+            Copyright = packageInfo.Copyright,
+            RequireLicenseAcceptance = false,
+            Icon = packageInfo.Icon?.Name,
+            PackageTypes =
+            [
+                new PackageType("DotnetTool", new Version(1, 0))
+            ]
+        };
+        if (packageInfo.ProjectUrl is { } projectUrl)
+        {
+            metadata.SetProjectUrl(projectUrl);
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var files = new List<ManifestFile>();
+
+            var manifestFile = Path.Combine(tempDir, "DotnetToolSettings.xml");
+            Directory.CreateDirectory(Path.GetDirectoryName(manifestFile)!);
+            using (var writer = new StreamWriter(manifestFile))
+            {
+                writer.WriteLine("""<?xml version="1.0" encoding="utf-8"?>""");
+                writer.WriteLine("""<DotNetCliTool Version="2">""");
+                writer.WriteLine("""  <Commands>""");
+                writer.WriteLine($"""    <Command Name="{commandName}" />""");
+                writer.WriteLine("""  </Commands>""");
+                writer.WriteLine("""  <RuntimeIdentifierPackages>""");
+
+                foreach (var (rid, ridPackage) in platformPackagesPerRid)
+                {
+                    writer.WriteLine(
+                        $"""    <RuntimeIdentifierPackage RuntimeIdentifier="{rid}" Id="{ridPackage}" />""");
+                }
+
+                writer.WriteLine("""  </RuntimeIdentifierPackages>""");
+                writer.WriteLine("""</DotNetCliTool>""");
+            }
+
+            files.Add(new ManifestFile { Source = manifestFile, Target = "tools/net6.0/any/DotnetToolSettings.xml" });
+
+            if (packageInfo.Icon is { } icon)
+            {
+                files.Add(new ManifestFile { Source = icon, Target = icon.Name });
+            }
+
+            var builder = new PackageBuilder();
+            builder.PopulateFiles("", files);
+            builder.Populate(metadata);
+
+            builder.Save(output);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+}
