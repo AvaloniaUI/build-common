@@ -1,11 +1,12 @@
 using System;
+using NuGet.Versioning;
 using Semver;
 
 namespace NukeExtensions;
 
 public static class VersionResolver
 {
-    public static SemVersion GetGitHubVersion(Version baseVersionNumber, bool isPackingToLocalCache)
+    public static NuGetVersion GetGitHubVersion(Version baseVersionNumber, bool isPackingToLocalCache)
     {
         return GetVersion(
             baseVersionNumber,
@@ -14,31 +15,30 @@ public static class VersionResolver
             Environment.GetEnvironmentVariable("GITHUB_RUN_NUMBER"));
     }
 
-    public static SemVersion GetVersion(Version baseVersionNumber, bool isPackingToLocalCache, string? refName, string? runNumber)
+    public static NuGetVersion GetVersion(Version baseVersionNumber, bool isPackingToLocalCache, string? refName, string? runNumber)
     {
         // Release tag
-        if (SemVersion.TryParse(refName, out var tagVersion))
+        if (NuGetVersion.TryParse(refName, out var tagVersion))
         {
             return tagVersion;
         }
         // Release branch
-        else if (SemVersion.TryParse(refName?.Replace("release/", "") ?? "", out var releaseVersion))
+        else if (NuGetVersion.TryParse(refName?.Replace("release/", "") ?? "", out var releaseVersion))
         {
             return releaseVersion;
         }
         // CI build number
         else if (int.TryParse(runNumber, out var ciRun))
         {
-            return SemVersion.Parse(
-                baseVersionNumber + "-cibuild" + ciRun.ToString("0000000") + "-alpha",
-                SemVersionStyles.Any);
+            return NuGetVersion.Parse(
+                baseVersionNumber + "-cibuild" + ciRun.ToString("0000000") + "-alpha");
         }
 
         if (isPackingToLocalCache)
         {
-            return SemVersion.Parse("9999.0.0-localbuild");
+            return NuGetVersion.Parse("9999.0.0-localbuild");
         }
 
-        return SemVersion.Parse(baseVersionNumber + "-localbuild-alpha", SemVersionStyles.Any);
+        return NuGetVersion.Parse(baseVersionNumber + "-localbuild-alpha");
     }
 }
