@@ -39,8 +39,8 @@ public static class DotNetToolBuilder
             Icon = packageInfo.Icon?.Name,
             PackageTypes =
             [
-                new PackageType("DotnetTool", new Version(1, 0)),
-                new PackageType("DotnetToolRidPackage", new Version(1, 0))
+                new PackageType("DotnetTool", PackageType.EmptyVersion),
+                new PackageType("DotnetToolRidPackage", PackageType.EmptyVersion)
             ]
         };
         if (packageInfo.ProjectUrl is { } projectUrl)
@@ -116,7 +116,7 @@ public static class DotNetToolBuilder
             Icon = packageInfo.Icon?.Name,
             PackageTypes =
             [
-                new PackageType("DotnetTool", new Version(1, 0))
+                new PackageType("DotnetTool", PackageType.EmptyVersion)
             ]
         };
         if (packageInfo.ProjectUrl is { } projectUrl)
