@@ -7,6 +7,9 @@
     <PackageProjectUrl>https://avaloniaui.net</PackageProjectUrl>
     <PackageIcon>icon.png</PackageIcon>
 
+    <_FullReadmePath>$(MSBuildProjectDirectory)/README.md</_FullReadmePath>
+    <PackageReadmeFile Condition="Exists('$(_FullReadmePath)')">README.md</PackageReadmeFile>
+
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
     <Deterministic>true</Deterministic>
     <DebugType Condition="$(ContinuousIntegrationBuild) == 'true'">embedded</DebugType>
@@ -14,5 +17,6 @@
 
   <ItemGroup Label="PackageIcon">
     <None Include="$(MSBuildThisFileDirectory)/../branding/icon.png" Pack="true" Visible="false" PackagePath=""/>
+    <None Condition="Exists('$(_FullReadmePath)')" Include="$(_FullReadmePath)" Pack="true" PackagePath="\"/>
   </ItemGroup>
 </Project>
