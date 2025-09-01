@@ -8,13 +8,14 @@ using Nuke.Common.IO;
 
 namespace NukeExtensions;
 
-public record NuGetPackageInfo(string PackageId, string Version)
+public record NuGetPackageInfo(string PackageId, NuGetVersion Version)
 {
     public string ProjectUrl { get; init; } = "https://avaloniaui.net/accelerate";
     public string? Author { get; init; } = "AvaloniaUI OÜ";
     public string? Copyright { get; init; } = $"Copyright 2019-{DateTime.Now.Year} © AvaloniaUI OÜ";
     public string? Description { get; init; } = PackageId;
     public AbsolutePath? Readme { get; init; }
+    public AbsolutePath? McpServerConfig { get; init; }
     public AbsolutePath? Icon { get; init; } = Statics.Icon;
 }
 
@@ -27,22 +28,11 @@ public static class DotNetToolBuilder
         string entryPoint,
         string commandName)
     {
-        var metadata = new ManifestMetadata
-        {
-            Id = packageInfo.PackageId,
-            Version = NuGetVersion.Parse(packageInfo.Version),
-            Authors = packageInfo.Author is { } author ? [author] : [],
-            Description = packageInfo.Description,
-            Copyright = packageInfo.Copyright,
-            RequireLicenseAcceptance = false,
-            Readme = packageInfo.Readme?.Name,
-            Icon = packageInfo.Icon?.Name,
-            PackageTypes =
-            [
-                new PackageType("DotnetTool", PackageType.EmptyVersion),
-                new PackageType("DotnetToolRidPackage", PackageType.EmptyVersion)
-            ]
-        };
+        var metadata = CreateMetadata(packageInfo,
+        [
+            new PackageType("DotnetTool", PackageType.EmptyVersion),
+            new PackageType("DotnetToolRidPackage", PackageType.EmptyVersion)
+        ]);
         if (packageInfo.ProjectUrl is { } projectUrl)
         {
             metadata.SetProjectUrl(projectUrl);
@@ -75,6 +65,11 @@ public static class DotNetToolBuilder
             {
                 files.Add(new ManifestFile { Source = readme, Target = readme.Name });
             }
+            if (packageInfo.McpServerConfig is { } mcpServerConfig)
+            {
+                var file = ResolveMcpConfig(packageInfo, tempDir, mcpServerConfig);
+                files.Add(file);
+            }
 
             foreach (var file in binariesDir.GlobFiles("**/*"))
             {
@@ -104,21 +99,10 @@ public static class DotNetToolBuilder
         string commandName,
         IReadOnlyDictionary<string, string> platformPackagesPerRid)
     {
-        var metadata = new ManifestMetadata
-        {
-            Id = packageInfo.PackageId,
-            Version = NuGetVersion.Parse(packageInfo.Version),
-            Authors = packageInfo.Author is { } author ? [author] : [],
-            Readme = packageInfo.Readme,
-            Description = packageInfo.Description,
-            Copyright = packageInfo.Copyright,
-            RequireLicenseAcceptance = false,
-            Icon = packageInfo.Icon?.Name,
-            PackageTypes =
-            [
-                new PackageType("DotnetTool", PackageType.EmptyVersion)
-            ]
-        };
+        var metadata = CreateMetadata(packageInfo,
+        [
+            new PackageType("DotnetTool", PackageType.EmptyVersion)
+        ]);
         if (packageInfo.ProjectUrl is { } projectUrl)
         {
             metadata.SetProjectUrl(projectUrl);
@@ -156,6 +140,15 @@ public static class DotNetToolBuilder
             {
                 files.Add(new ManifestFile { Source = icon, Target = icon.Name });
             }
+            if (packageInfo.Readme is { } readme)
+            {
+                files.Add(new ManifestFile { Source = readme, Target = readme.Name });
+            }
+            if (packageInfo.McpServerConfig is { } mcpServerConfig)
+            {
+                var file = ResolveMcpConfig(packageInfo, tempDir, mcpServerConfig);
+                files.Add(file);
+            }
 
             var builder = new PackageBuilder();
             builder.PopulateFiles("", files);
@@ -167,5 +160,33 @@ public static class DotNetToolBuilder
         {
             Directory.Delete(tempDir, true);
         }
+    }
+
+    private static ManifestMetadata CreateMetadata(NuGetPackageInfo packageInfo, IEnumerable<PackageType> packageTypes)
+    {
+        var metadata = new ManifestMetadata
+        {
+            Id = packageInfo.PackageId,
+            Version = packageInfo.Version,
+            Authors = packageInfo.Author is { } author ? [author] : [],
+            Description = packageInfo.Description,
+            Copyright = packageInfo.Copyright,
+            RequireLicenseAcceptance = false,
+            Readme = packageInfo.Readme?.Name,
+            Icon = packageInfo.Icon?.Name,
+            PackageTypes = packageTypes
+        };
+        return metadata;
+    }
+
+    private static ManifestFile ResolveMcpConfig(NuGetPackageInfo packageInfo, string tempDir, AbsolutePath mcpServerConfig)
+    {
+        var mcpServerConfigCopy = Path.Combine(tempDir, "server.json");
+        var mcpConfig = File.ReadAllText(mcpServerConfig)
+            .Replace("$(DESCRIPTION)", packageInfo.Description)
+            .Replace("$(VERSION)", packageInfo.Version.ToString());
+        File.WriteAllText(mcpServerConfigCopy, mcpConfig);
+        var file = new ManifestFile { Source = mcpServerConfigCopy, Target = ".mcp/server.json" };
+        return file;
     }
 }
