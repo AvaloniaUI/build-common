@@ -67,8 +67,7 @@ public static class DotNetToolBuilder
             }
             if (packageInfo.McpServerConfig is { } mcpServerConfig)
             {
-                var file = ResolveMcpConfig(packageInfo, tempDir, mcpServerConfig);
-                files.Add(file);
+                files.Add(new ManifestFile { Source = mcpServerConfig, Target = ".mcp/server.json" });
             }
 
             foreach (var file in binariesDir.GlobFiles("**/*"))
@@ -146,8 +145,7 @@ public static class DotNetToolBuilder
             }
             if (packageInfo.McpServerConfig is { } mcpServerConfig)
             {
-                var file = ResolveMcpConfig(packageInfo, tempDir, mcpServerConfig);
-                files.Add(file);
+                files.Add(new ManifestFile { Source = mcpServerConfig, Target = ".mcp/server.json" });
             }
 
             var builder = new PackageBuilder();
@@ -177,16 +175,5 @@ public static class DotNetToolBuilder
             PackageTypes = packageTypes
         };
         return metadata;
-    }
-
-    private static ManifestFile ResolveMcpConfig(NuGetPackageInfo packageInfo, string tempDir, AbsolutePath mcpServerConfig)
-    {
-        var mcpServerConfigCopy = Path.Combine(tempDir, "server.json");
-        var mcpConfig = File.ReadAllText(mcpServerConfig)
-            .Replace("$(DESCRIPTION)", packageInfo.Description)
-            .Replace("$(VERSION)", packageInfo.Version.ToString());
-        File.WriteAllText(mcpServerConfigCopy, mcpConfig);
-        var file = new ManifestFile { Source = mcpServerConfigCopy, Target = ".mcp/server.json" };
-        return file;
     }
 }
