@@ -150,7 +150,7 @@ public static class DotNetToolBuilder
                 writer.WriteLine("""</DotNetCliTool>""");
             }
 
-            files.Add(new ManifestFile { Source = manifestFile, Target = "tools/net6.0/any/DotnetToolSettings.xml" });
+            files.Add(new ManifestFile { Source = manifestFile, Target = "tools/net10.0/any/DotnetToolSettings.xml" });
 
             if (packageInfo.Icon is { } icon)
             {
