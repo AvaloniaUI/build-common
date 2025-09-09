@@ -20,7 +20,8 @@ public static class Babel
         IEnumerable<ObfuscationTargetFramework> targets,
         AbsolutePath? licenseFile = null,
         AbsolutePath? signKey = null,
-        IReadOnlyCollection<AbsolutePath>? rulesFiles = null)
+        IReadOnlyCollection<AbsolutePath>? rulesFiles = null,
+        bool inlineExpansion = false)
     {
         bool tempLicense = false;
         if (licenseFile is null)
@@ -78,6 +79,11 @@ public static class Babel
                 {
                     args.AppendLiteral(" --keyfile ");
                     args.AppendFormatted(signKey);
+                }
+
+                if (inlineExpansion)
+                {
+                    args.AppendLiteral(" --inlineexpansion ");
                 }
 
                 args.AppendLiteral(" --output ");
