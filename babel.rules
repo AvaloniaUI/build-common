@@ -48,6 +48,19 @@
         <Description>Disable Internalize Themes</Description>
     </Rule>
 
+    <Rule name="InlineLoadAndValidateLibrary"
+          feature="optimizations"
+          exclude="false">
+        <Pattern isRegEx="true">
+            <![CDATA[
+                ^AvaloniaUI\.Licensing\.AvaloniaLicenseInformation::(LoadAndValidateLibrary|ValidateLibrary).*
+            ]]>
+        </Pattern>
+        <Properties>
+          <Inline>True</Inline>
+        </Properties>
+    </Rule>
+
     <Rule name="InternalizeLicensing"
           feature="merge"
           exclude="false"
