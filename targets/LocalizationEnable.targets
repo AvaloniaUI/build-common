@@ -2,18 +2,18 @@
 
     <PropertyGroup>
         <ResxGenerator Condition="'$(ResxGenerator)' == ''">MicrosoftResxSourceGenerator</ResxGenerator>
-        <PublicResxClass Condition="'$(PublicResxClass)' == ''">true</PublicResxClass>
+        <ResxGeneratorIsPublic Condition="'$(ResxGeneratorIsPublic)' == ''">true</ResxGeneratorIsPublic>
 
         <_MeziantouVisibility>internal</_MeziantouVisibility>
-        <_MeziantouVisibility Condition="'$(PublicResxClass)' == 'true'">public</_MeziantouVisibility>
+        <_MeziantouVisibility Condition="'$(ResxGeneratorIsPublic)' == 'true'">public</_MeziantouVisibility>
 
         <_ResXCodeGeneratorType>ResXFileCodeGenerator</_ResXCodeGeneratorType>
-        <_ResXCodeGeneratorType Condition="'$(PublicResxClass)' == 'true'">PublicResXFileCodeGenerator</_ResXCodeGeneratorType>
+        <_ResXCodeGeneratorType Condition="'$(ResxGeneratorIsPublic)' == 'true'">PublicResXFileCodeGenerator</_ResXCodeGeneratorType>
     </PropertyGroup>
 
     <!-- New semi-stable official source generator -->
     <ItemGroup Condition="'$(ResxGenerator)' == 'MicrosoftResxSourceGenerator'">
-        <EmbeddedResource Update="**/*.resx" Public="$(PublicResxClass)" EmitFormatMethods="true"/>
+        <EmbeddedResource Update="**/*.resx" Public="$(ResxGeneratorIsPublic)" EmitFormatMethods="true"/>
         <PackageReference Include="Microsoft.CodeAnalysis.ResxSourceGenerator" Version="5.0.0-*" PrivateAssets="all"/>
     </ItemGroup>
 
