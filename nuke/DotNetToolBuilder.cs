@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using NuGet.Packaging;
 using NuGet.Packaging.Core;
 using NuGet.Versioning;
@@ -14,6 +15,7 @@ public record NuGetPackageInfo(string PackageId, NuGetVersion Version)
     public string? Author { get; init; } = "AvaloniaUI OÜ";
     public string? Copyright { get; init; } = $"Copyright 2019-{DateTime.Now.Year} © AvaloniaUI OÜ";
     public string? Description { get; init; } = PackageId;
+    public AbsolutePath? ReleaseNotes { get; init; }
     public AbsolutePath? Readme { get; init; }
     public AbsolutePath? McpServerConfig { get; init; }
     public AbsolutePath? Icon { get; init; } = Statics.Icon;
@@ -33,10 +35,6 @@ public static class DotNetToolBuilder
             new PackageType("DotnetTool", PackageType.EmptyVersion),
             new PackageType("DotnetToolRidPackage", PackageType.EmptyVersion)
         ]);
-        if (packageInfo.ProjectUrl is { } projectUrl)
-        {
-            metadata.SetProjectUrl(projectUrl);
-        }
 
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         try
@@ -102,10 +100,6 @@ public static class DotNetToolBuilder
         [
             new PackageType("DotnetTool", PackageType.EmptyVersion)
         ]);
-        if (packageInfo.ProjectUrl is { } projectUrl)
-        {
-            metadata.SetProjectUrl(projectUrl);
-        }
 
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         try
@@ -174,6 +168,36 @@ public static class DotNetToolBuilder
             Icon = packageInfo.Icon?.Name,
             PackageTypes = packageTypes
         };
+        if (packageInfo.ProjectUrl is { } projectUrl)
+        {
+            metadata.SetProjectUrl(projectUrl);
+        }
+
+        if (File.Exists(packageInfo.ReleaseNotes))
+        {
+            var releaseNotesContent = File.ReadAllText(packageInfo.ReleaseNotes);
+            metadata.ReleaseNotes = TrimReleaseNotesByLines(releaseNotesContent);
+        }
+
         return metadata;
+    }
+
+    private static string TrimReleaseNotesByLines(string content, int maxLength = 35000)
+    {
+        if (content.Length <= maxLength)
+            return content;
+
+        var lines = content.Split(['\r', '\n'], StringSplitOptions.None);
+        var result = new StringBuilder();
+
+        foreach (var line in lines)
+        {
+            if (result.Length + (line.Length + Environment.NewLine.Length) > maxLength)
+                break;
+
+            result.AppendLine(line);
+        }
+
+        return result.ToString().TrimEnd();
     }
 }

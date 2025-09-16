@@ -93,4 +93,12 @@
 		<Description>Do not renaming Anonymous Types.</Description>
 	</Rule>
 
+	<Rule name="DontRenameCompiledAvaloniaXaml"
+		feature="renaming, dead code" 
+		exclude="true" 
+		applyToMembers="true">
+		<Pattern>CompiledAvaloniaXaml*</Pattern>
+		<Description>Do not renaming Anonymous Types.</Description>
+	</Rule>
+
 </Rules>

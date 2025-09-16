@@ -2,24 +2,31 @@
 
     <PropertyGroup>
         <ResxGenerator Condition="'$(ResxGenerator)' == ''">MicrosoftResxSourceGenerator</ResxGenerator>
+        <ResxGeneratorIsPublic Condition="'$(ResxGeneratorIsPublic)' == ''">true</ResxGeneratorIsPublic>
+
+        <_MeziantouVisibility>internal</_MeziantouVisibility>
+        <_MeziantouVisibility Condition="'$(ResxGeneratorIsPublic)' == 'true'">public</_MeziantouVisibility>
+
+        <_ResXCodeGeneratorType>ResXFileCodeGenerator</_ResXCodeGeneratorType>
+        <_ResXCodeGeneratorType Condition="'$(ResxGeneratorIsPublic)' == 'true'">PublicResXFileCodeGenerator</_ResXCodeGeneratorType>
     </PropertyGroup>
 
     <!-- New semi-stable official source generator -->
     <ItemGroup Condition="'$(ResxGenerator)' == 'MicrosoftResxSourceGenerator'">
-        <EmbeddedResource Update="**/*.resx" Public="true" EmitFormatMethods="true"/>
+        <EmbeddedResource Update="**/*.resx" Public="$(ResxGeneratorIsPublic)" EmitFormatMethods="true"/>
         <PackageReference Include="Microsoft.CodeAnalysis.ResxSourceGenerator" Version="5.0.0-*" PrivateAssets="all"/>
     </ItemGroup>
 
     <!-- Alternative source generator -->
     <ItemGroup Condition="'$(ResxGenerator)' == 'MeziantouResxSourceGenerator'">
-        <AdditionalFiles Include="**/*.resx" Visibility="public"/>
+        <AdditionalFiles Include="**/*.resx" Visibility="$(_MeziantouVisibility)"/>
         <PackageReference Include="Meziantou.Framework.ResxSourceGenerator" Version="1.0.13" PrivateAssets="all"/>
     </ItemGroup>
 
     <!-- Old approach, still works better with rider -->
-    <ItemGroup Condition="'$(ResxGenerator)' == 'PublicResXFileCodeGenerator'">
+    <ItemGroup Condition="'$(ResxGenerator)' == 'ResXFileCodeGenerator'">
         <EmbeddedResource Update="Resources\Strings.resx">
-            <Generator>PublicResXFileCodeGenerator</Generator>
+            <Generator>$(_ResXCodeGeneratorType)</Generator>
             <LastGenOutput>Strings.Designer.cs</LastGenOutput>
         </EmbeddedResource>
         <Compile Update="Resources\Strings.Designer.cs">
