@@ -78,17 +78,29 @@ public static class Babel
                     args.AppendFormatted(rulesFile);
                 }
 
-                if(dependencyMapFiles is not null)
+                if(perTargetDependencyMapFiles is not null)
                 {
-                    foreach (var depMap in dependencyMapFiles)
+                    if(perTargetDependencyMapFiles.TryGetValue(tfm, out var dependencyMapFiles))
                     {
-                        args.AppendLiteral(" --map-in ");
-                        args.AppendFormatted(depMap);
-                    }
+                        foreach (var depMap in dependencyMapFiles)
+                        {
+                            args.AppendLiteral(" --map-in ");
+                            args.AppendFormatted(depMap);
+                        }
+                    }                   
 
                     var mapOutput = outputDir / $"{assemblyName}.map.xml";
 
-                    dependencyMapFiles.Add(mapOutput);
+                    if(dependencyMapFiles is null)
+                    {
+                        dependencyMapFiles = [mapOutput];
+
+                        perTargetDependencyMapFiles[tfm] = dependencyMapFiles;
+                    }
+                    else
+                    {
+                        dependencyMapFiles.Add(mapOutput);
+                    }  
 
                     args.AppendLiteral(" --map-out ");
                     args.AppendFormatted(mapOutput);
