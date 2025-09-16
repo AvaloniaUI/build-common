@@ -21,6 +21,7 @@ public static class Babel
         AbsolutePath? licenseFile = null,
         AbsolutePath? signKey = null,
         IReadOnlyCollection<AbsolutePath>? rulesFiles = null,
+        Dictionary<string, List<AbsolutePath>>? perTargetDependencyMapFiles = null,
         bool inlineExpansion = false)
     {
         bool tempLicense = false;
@@ -47,6 +48,8 @@ public static class Babel
         {
             foreach (var (outputDir, dependencyFiles) in targets)
             {
+                var tfm = outputDir.Name;
+
                 var dll = outputDir / (assemblyName + ".dll");
                 var dependencies = dependencyFiles.Select(file => outputDir / (file + ".dll")).ToArray();
                 Log.Information("Obfuscating {FileName} in {Folder}. And merging with {Dependencies}",
@@ -73,6 +76,22 @@ public static class Babel
                 {
                     args.AppendLiteral(" --rules ");
                     args.AppendFormatted(rulesFile);
+                }
+
+                if(dependencyMapFiles is not null)
+                {
+                    foreach (var depMap in dependencyMapFiles)
+                    {
+                        args.AppendLiteral(" --map-in ");
+                        args.AppendFormatted(depMap);
+                    }
+
+                    var mapOutput = outputDir / $"{assemblyName}.map.xml";
+
+                    dependencyMapFiles.Add(mapOutput);
+
+                    args.AppendLiteral(" --map-out ");
+                    args.AppendFormatted(mapOutput);
                 }
 
                 if (signKey is not null)
