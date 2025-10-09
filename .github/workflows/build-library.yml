@@ -1,0 +1,41 @@
+name: Build Library
+
+on:
+  workflow_call:
+    inputs:
+      artifact_name:
+        required: true
+        type: string
+      nuke_target:
+        required: false
+        type: string
+      configuration:
+        required: false
+        type: string
+      runs_on:
+        required: false
+        type: string
+        default: ubuntu-latest
+    secrets:
+      checkout_token:
+        required: false
+
+jobs:
+
+  build:
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+          token: ${{ secrets.checkout_token }}
+          submodules: 'recursive'
+
+    - name: Create NuGet Packages
+      run: dotnet run --project ${{github.workspace}}/build/_build.csproj -- --target ${{ inputs.nuke_target || 'CreateNugetPackages' }} --configuration ${{ inputs.configuration || 'Release' }} --output ${{github.workspace}}/artifacts/packages/
+
+    - name: Upload nupkg artifacts
+      uses: actions/upload-artifact@v4
+      with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{github.workspace}}/artifacts/**/*.nupkg
+          retention-days: 1
