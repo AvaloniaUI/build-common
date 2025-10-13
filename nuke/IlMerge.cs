@@ -57,6 +57,8 @@ public static class IlMerge
             }
 
             args.AppendLiteral($" /out:{dll} ");
+            args.AppendFormatted(dll);
+            args.AppendLiteral(" ");
             args.AppendFormatted(dependencies);
 
             ilRepack.Invoke(args, outputDir);
