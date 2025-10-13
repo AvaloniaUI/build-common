@@ -48,7 +48,7 @@ public static class IlMerge
                 }
             }
 
-            args.AppendLiteral(" /parallel /ndebug ");
+            args.AppendLiteral(" /parallel /ndebug /copyattrs /allowMultiple ");
             if (signKey is not null)
             {
                 args.AppendLiteral(" /keyfile:");
