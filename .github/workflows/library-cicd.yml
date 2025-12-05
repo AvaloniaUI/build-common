@@ -40,6 +40,10 @@ on:
         required: false
         type: string
         default: "CreateNugetPackages"
+      nuke_project:
+        required: false
+        type: string
+        default: "/build/_build.csproj"
       configuration:
         required: false
         type: string
@@ -108,7 +112,7 @@ jobs:
       run: dotnet workload install android ios --version ${{ inputs.dotnet_sdk }}
 
     - name: Create NuGet Packages
-      run: dotnet run --project ${{github.workspace}}/build/_build.csproj -- --target ${{ inputs.nuke_target }} --configuration ${{ inputs.configuration }} --output ${{github.workspace}}/artifacts/packages/
+      run: dotnet run --project ${{github.workspace}}${{ inputs.nuke_project }} -- --target ${{ inputs.nuke_target }} --configuration ${{ inputs.configuration }} --output ${{github.workspace}}/artifacts/packages/
 
     - name: Upload NuGet Artifacts
       uses: actions/upload-artifact@v4
