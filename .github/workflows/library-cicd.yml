@@ -54,8 +54,8 @@ on:
         default: ubuntu-latest
       install_workloads:
         required: false
-        type: boolean
-        default: true
+        type: string
+        default: ""
       dotnet_sdk:
         required: false
         type: string
@@ -103,13 +103,9 @@ jobs:
       with:
           dotnet-version: ${{ inputs.dotnet_sdk }}
 
-    - name: Install Android workload
-      if: ${{ inputs.install_workloads && runner.os == 'Linux' }}
-      run: dotnet workload install android --version ${{ inputs.dotnet_sdk }}
-
     - name: Install workloads
-      if: ${{ inputs.install_workloads && runner.os != 'Linux' }}
-      run: dotnet workload install android ios --version ${{ inputs.dotnet_sdk }}
+      if: ${{ inputs.install_workloads != "" }}
+      run: dotnet workload install ${{ inputs.install_workloads }} --version ${{ inputs.dotnet_sdk }}
 
     - name: Create NuGet Packages
       run: dotnet run --project ${{github.workspace}}/${{ inputs.nuke_project }} -- --target ${{ inputs.nuke_target }} --configuration ${{ inputs.configuration }} --output ${{github.workspace}}/artifacts/packages/
