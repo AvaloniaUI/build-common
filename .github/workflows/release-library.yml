@@ -68,18 +68,20 @@ jobs:
       - name: Fail if push_nightly requires nightly_api_key but is missing
         if: ${{ inputs.push_nightly }}
         run: |
-          if (-not ${{ secrets.nightly_api_key }}) {
-            Write-Error "push_nightly is true but nightly_api_key is missing."
-            exit 1
+          $key = "${{ secrets.nightly_api_key }}"
+          if (-not $key) {
+              Write-Error "push_nightly is true but nightly_api_key is missing."
+              exit 1
           }
         shell: pwsh
 
       - name: Fail if push_stable requires stable_api_key but is missing
         if: ${{ inputs.push_stable }}
         run: |
-          if (-not ${{ secrets.stable_api_key }}) {
-            Write-Error "push_stable is true but stable_api_key is missing."
-            exit 1
+          $key = "${{ secrets.stable_api_key }}"
+          if (-not $key) {
+              Write-Error "push_stable is true but stable_api_key is missing."
+              exit 1
           }
         shell: pwsh
 
@@ -94,6 +96,7 @@ jobs:
 
   build_library:
     runs-on: ${{ inputs.runs_on }}
+    needs: [validate-inputs]
     steps:
     - uses: actions/checkout@v4
       with:
