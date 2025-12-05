@@ -54,11 +54,11 @@ jobs:
 
     - name: Install Android workload
       if: ${{ inputs.install_workloads && runner.os == 'Linux' }}
-      run: dotnet workload install android ios --version ${{ inputs.dotnet_sdk }}
+      run: dotnet workload install android --version ${{ inputs.dotnet_sdk }}
 
     - name: Install workloads
       if: ${{ inputs.install_workloads && runner.os != 'Linux' }}
-      run: dotnet workload install android --version ${{ inputs.dotnet_sdk }}
+      run: dotnet workload install android ios --version ${{ inputs.dotnet_sdk }}
 
     - name: Create NuGet Packages
       run: dotnet run --project ${{github.workspace}}/build/_build.csproj -- --target ${{ inputs.nuke_target }} --configuration ${{ inputs.configuration }} --output ${{github.workspace}}/artifacts/packages/
