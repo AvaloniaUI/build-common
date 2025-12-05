@@ -40,7 +40,7 @@ on:
 
 jobs:
 
-  build:
+  build_library:
     runs-on: ${{ inputs.runs_on }}
     steps:
     - uses: actions/checkout@v4
