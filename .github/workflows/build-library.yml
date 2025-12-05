@@ -6,16 +6,34 @@ on:
       artifact_name:
         required: true
         type: string
+      artifact_glob:
+        type: string
+        required: false
+        default: "**/*.nupkg"
+      artifact_retention_days:
+        type: number
+        required: false
+        default: 1
       nuke_target:
         required: false
         type: string
+        default: "CreateNugetPackages"
       configuration:
         required: false
         type: string
+        default: "Release"
       runs_on:
         required: false
         type: string
         default: ubuntu-latest
+      install_workloads:
+        required: false
+        type: boolean
+        default: true
+      dotnet_sdk:
+        required: false
+        type: string
+        default: 9.0.308
     secrets:
       checkout_token:
         required: false
@@ -30,12 +48,20 @@ jobs:
           token: ${{ secrets.checkout_token }}
           submodules: 'recursive'
 
+    - uses: actions/setup-dotnet@v4
+      with:
+          dotnet-version: ${{ input.dotnet_sdk }}
+
+    - name: Install workloads
+      if: ${{ inputs.install_workloads }}
+      run: dotnet workload install android ios --version ${{ input.dotnet_sdk }}
+
     - name: Create NuGet Packages
-      run: dotnet run --project ${{github.workspace}}/build/_build.csproj -- --target ${{ inputs.nuke_target || 'CreateNugetPackages' }} --configuration ${{ inputs.configuration || 'Release' }} --output ${{github.workspace}}/artifacts/packages/
+      run: dotnet run --project ${{github.workspace}}/build/_build.csproj -- --target ${{ inputs.nuke_target }} --configuration ${{ inputs.configuration }} --output ${{github.workspace}}/artifacts/packages/
 
     - name: Upload nupkg artifacts
       uses: actions/upload-artifact@v4
       with:
           name: ${{ inputs.artifact_name }}
-          path: ${{github.workspace}}/artifacts/**/*.nupkg
-          retention-days: 1
+          path: ${{github.workspace}}/artifacts/packages/${{ inputs.artifact_glob }}
+          retention-days: ${{ inputs.artifact_retention_days }}
