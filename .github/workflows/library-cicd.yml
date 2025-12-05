@@ -141,6 +141,10 @@ jobs:
     needs: [push-package]
     if: ${{ inputs.create_github_release }}
     steps:
+      # Need checkout to read changelog file
+      - uses: actions/checkout@v4
+        with:
+            token: ${{ secrets.checkout_token }}
 
       - name: Extract version from branch
         id: version
