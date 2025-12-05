@@ -1,0 +1,188 @@
+name: Library CI/CD
+
+on:
+  workflow_call:
+    inputs:
+      push_package:
+        required: false
+        type: boolean
+        default: true
+      nuget_feed:
+        required: false
+        type: string
+        default: "https://api.nuget.org/v3/index.json"
+      validate_release_branch:
+        required: false
+        type: boolean
+        default: false
+
+      create_github_release:
+        required: false
+        type: boolean
+        default: false
+      release_changelog_file:
+        required: false
+        type: string
+
+      artifact_name:
+        type: string
+        required: false
+        default: "nupkg"
+      artifact_glob:
+        type: string
+        required: false
+        default: "**/*.nupkg"
+      artifact_retention_days:
+        type: number
+        required: false
+        default: 1
+      nuke_target:
+        required: false
+        type: string
+        default: "CreateNugetPackages"
+      configuration:
+        required: false
+        type: string
+        default: "Release"
+      runs_on:
+        required: false
+        type: string
+        default: ubuntu-latest
+      install_workloads:
+        required: false
+        type: boolean
+        default: true
+      dotnet_sdk:
+        required: false
+        type: string
+        default: 9.0.308
+    secrets:
+      checkout_token:
+        required: true
+      nuget_api_key:
+        required: false
+
+jobs:
+
+  validate-inputs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if push_package requires nuget_api_key but is missing
+        if: ${{ inputs.push_package }}
+        run: |
+          $key = "${{ secrets.nuget_api_key }}"
+          if (-not $key) {
+              Write-Error "push_package is true but nuget_api_key is missing."
+              exit 1
+          }
+        shell: pwsh
+
+      - name: Fail if validate_release_branch is true but ref is not release/*
+        if: ${{ inputs.validate_release_branch && !startsWith(github.ref_name, 'release/') }}
+        run: |
+          echo  "validate_release_branch is true but github.ref_name '${{ github.ref_name }}' is not a release/* branch."
+          exit 1
+
+      - name: Validation passed
+        run: echo "All validation rules passed."
+
+  build_library:
+    runs-on: ${{ inputs.runs_on }}
+    needs: [validate-inputs]
+    steps:
+    - uses: actions/checkout@v4
+      with:
+          token: ${{ secrets.checkout_token }}
+          submodules: 'recursive'
+
+    - uses: actions/setup-dotnet@v4
+      with:
+          dotnet-version: ${{ inputs.dotnet_sdk }}
+
+    - name: Install Android workload
+      if: ${{ inputs.install_workloads && runner.os == 'Linux' }}
+      run: dotnet workload install android --version ${{ inputs.dotnet_sdk }}
+
+    - name: Install workloads
+      if: ${{ inputs.install_workloads && runner.os != 'Linux' }}
+      run: dotnet workload install android ios --version ${{ inputs.dotnet_sdk }}
+
+    - name: Create NuGet Packages
+      run: dotnet run --project ${{github.workspace}}/build/_build.csproj -- --target ${{ inputs.nuke_target }} --configuration ${{ inputs.configuration }} --output ${{github.workspace}}/artifacts/packages/
+
+    - name: Upload NuGet Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+          fail-on-empty: true
+          name: ${{ inputs.artifact_name }}
+          path: ${{github.workspace}}/artifacts/packages/${{ inputs.artifact_glob }}
+          retention-days: ${{ inputs.artifact_retention_days }}
+
+  push-nuget-package:
+    runs-on: ubuntu-latest
+    needs: [build_library]
+    if: ${{ inputs.push_package }}
+    steps:
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: ./nupkgs
+
+    - name: Push NuGet Package
+      run: dotnet nuget push ./nupkgs/**/*.nupkg --api-key ${{secrets.nuget_api_key}} --source ${{ inputs.nuget_feed }}
+
+  create-github-release:
+    runs-on: ubuntu-latest
+    needs: [push-nuget-package]
+    if: ${{ inputs.create_github_release }}
+    steps:
+
+      - name: Extract version from branch
+        id: version
+        run: |
+          branch="${GITHUB_REF##*/}"
+          version="${branch#release/}"
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Extract changelog for version
+        id: changelog
+        uses: actions/github-script@v7
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          CHANGELOG_FILE: ${{ inputs.release_changelog_file }}
+        with:
+          script: |
+            const fs = require('fs');
+            const version = process.env.RELEASE_VERSION;
+            const filePath = process.env.CHANGELOG_FILE;
+            if (!filePath || !version)
+              return "";
+
+            const content = fs.readFileSync(filePath, 'utf8');
+
+            // Split content into sections by top-level headers
+            const sections = content.split(/^# /m).map(s => s.trim()).filter(Boolean);
+
+            // Find the section that starts with the requested version
+            const section = sections.find(s => s.startsWith(version));
+
+            let changes = '';
+            if (section) {
+              // Remove the version header line itself
+              changes = section.split(/\r?\n/).slice(1).join('\n').trim();
+            }
+
+            console.log('Extracted changes:');
+            console.log(changes);
+
+            return { changes };
+
+      - name: Create tag & release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.changelog.outputs.changes }}
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
