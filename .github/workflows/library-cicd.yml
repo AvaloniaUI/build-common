@@ -141,10 +141,6 @@ jobs:
     needs: [push-package]
     if: ${{ inputs.create_github_release }}
     steps:
-      # Need checkout to read changelog file
-      - uses: actions/checkout@v4
-        with:
-            token: ${{ secrets.checkout_token }}
 
       - name: Extract version from branch
         id: version
@@ -153,44 +149,10 @@ jobs:
           version="${branch#release/}"
           echo "version=$version" >> $GITHUB_OUTPUT
 
-      - name: Extract changelog for version
-        id: changelog
-        uses: actions/github-script@v7
-        env:
-          RELEASE_VERSION: ${{ steps.version.outputs.version }}
-          CHANGELOG_FILE: ${{ github.workspace }}/${{ inputs.release_changelog_file }}
-        with:
-          script: |
-            const fs = require('fs');
-            const version = process.env.RELEASE_VERSION;
-            const filePath = process.env.CHANGELOG_FILE;
-            if (!filePath || !version)
-              return "";
-
-            const content = fs.readFileSync(filePath, 'utf8');
-
-            // Split content into sections by top-level headers
-            const sections = content.split(/^# /m).map(s => s.trim()).filter(Boolean);
-
-            // Find the section that starts with the requested version
-            const section = sections.find(s => s.startsWith(version));
-
-            let changes = '';
-            if (section) {
-              // Remove the version header line itself
-              changes = section.split(/\r?\n/).slice(1).join('\n').trim();
-            }
-
-            console.log('Extracted changes:');
-            console.log(changes);
-
-            return { changes };
-
       - name: Create tag & release
         uses: softprops/action-gh-release@v2
         with:
-          body: ${{ steps.changelog.outputs.changes }}
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
