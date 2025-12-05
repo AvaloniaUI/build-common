@@ -64,7 +64,7 @@ on:
 
 jobs:
 
-  validate-inputs:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - name: Fail if push_package requires nuget_api_key but is missing
@@ -86,9 +86,9 @@ jobs:
       - name: Validation passed
         run: echo "All validation rules passed."
 
-  build_library:
+  build:
     runs-on: ${{ inputs.runs_on }}
-    needs: [validate-inputs]
+    needs: [validate]
     steps:
     - uses: actions/checkout@v4
       with:
@@ -118,9 +118,9 @@ jobs:
           path: ${{github.workspace}}/artifacts/packages/${{ inputs.artifact_glob }}
           retention-days: ${{ inputs.artifact_retention_days }}
 
-  push-nuget-package:
+  push-package:
     runs-on: ubuntu-latest
-    needs: [build_library]
+    needs: [build]
     if: ${{ inputs.push_package }}
     steps:
 
@@ -132,9 +132,9 @@ jobs:
     - name: Push NuGet Package
       run: dotnet nuget push ./nupkgs/**/*.nupkg --api-key ${{secrets.nuget_api_key}} --source ${{ inputs.nuget_feed }}
 
-  create-github-release:
+  github-release:
     runs-on: ubuntu-latest
-    needs: [push-nuget-package]
+    needs: [push-package]
     if: ${{ inputs.create_github_release }}
     steps:
 
