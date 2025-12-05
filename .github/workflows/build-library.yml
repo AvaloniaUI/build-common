@@ -41,7 +41,7 @@ on:
 jobs:
 
   build:
-    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runs_on }}
     steps:
     - uses: actions/checkout@v4
       with:
