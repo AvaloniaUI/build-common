@@ -7,10 +7,18 @@ on:
         required: false
         type: boolean
         default: false
-      push_nuget:
+      push_stable:
         required: false
         type: boolean
         default: false
+      nightly_feed:
+        required: false
+        type: string
+        default: "https://nuget-feed-nightly.avaloniaui.net/v3/index.json"
+      stable_feed:
+        required: false
+        type: string
+        default: "https://api.nuget.org/v3/index.json"
 
       artifact_name:
         type: string
@@ -49,7 +57,7 @@ on:
         required: true
       nightly_api_key:
         required: false
-      nuget_api_key:
+      stable_api_key:
         required: false
 
 jobs:
@@ -63,16 +71,16 @@ jobs:
           echo  "push_nightly is true but nightly_api_key is missing."
           exit 1
 
-      - name: Fail if push_nuget requires nuget_api_key but is missing
-        if: ${{ inputs.push_nuget && !secrets.nuget_api_key }}
+      - name: Fail if push_stable requires stable_api_key but is missing
+        if: ${{ inputs.push_stable && !secrets.stable_api_key }}
         run: |
-          echo  "push_nuget is true but nuget_api_key is missing."
+          echo  "push_stable is true but stable_api_key is missing."
           exit 1
 
-      - name: Fail if push_nuget is true but ref is not release/*
-        if: ${{ inputs.push_nuget && !startsWith(github.ref_name, 'release/') }}
+      - name: Fail if push_stable is true but ref is not release/*
+        if: ${{ inputs.push_stable && !startsWith(github.ref_name, 'release/') }}
         run: |
-          echo  "push_nuget is true but github.ref_name '${{ github.ref_name }}' is not a release/* branch."
+          echo  "push_stable is true but github.ref_name '${{ github.ref_name }}' is not a release/* branch."
           exit 1
 
       - name: Validation passed
@@ -120,12 +128,12 @@ jobs:
             path: ./nupkgs
 
       - name: Publish Nightly release
-        run: dotnet nuget push ./nupkgs/**/*.nupkg --api-key ${{secrets.nightly_api_key}} --source https://nuget-feed-nightly.avaloniaui.net/v3/index.json
+        run: dotnet nuget push ./nupkgs/**/*.nupkg --api-key ${{secrets.nightly_api_key}} --source ${{ inputs.nightly_feed }}
 
   publish-stable-release:
     runs-on: ubuntu-latest
     needs: [build_library]
-    if: ${{ inputs.push_nuget }}
+    if: ${{ inputs.push_stable }}
     steps:
 
     - uses: actions/download-artifact@v4
@@ -133,5 +141,5 @@ jobs:
         name: ${{ inputs.artifact_name }}
         path: ./nupkgs
 
-    - name: Publish NuGet release
-      run: dotnet nuget push ./nupkgs/**/*.nupkg --api-key ${{secrets.nuget_api_key}} --source https://api.nuget.org/v3/index.json
+    - name: Publish Stable release
+      run: dotnet nuget push ./nupkgs/**/*.nupkg --api-key ${{secrets.stable_api_key}} --source ${{ inputs.stable_feed }}
