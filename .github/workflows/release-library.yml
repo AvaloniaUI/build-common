@@ -66,16 +66,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Fail if push_nightly requires nightly_api_key but is missing
-        if: ${{ inputs.push_nightly }} && !${{ secrets.nightly_api_key }}
+        if: ${{ inputs.push_nightly }}
         run: |
-          echo  "push_nightly is true but nightly_api_key is missing."
-          exit 1
+          if (-not ${{ secrets.nightly_api_key }}) {
+            Write-Error "push_nightly is true but nightly_api_key is missing."
+            exit 1
+          }
+        shell: pwsh
 
       - name: Fail if push_stable requires stable_api_key but is missing
-        if: ${{ inputs.push_stable }} && !${{ secrets.stable_api_key }}
+        if: ${{ inputs.push_stable }}
         run: |
-          echo  "push_stable is true but stable_api_key is missing."
-          exit 1
+          if (-not ${{ secrets.stable_api_key }}) {
+            Write-Error "push_stable is true but stable_api_key is missing."
+            exit 1
+          }
+        shell: pwsh
 
       - name: Fail if push_stable is true but ref is not release/*
         if: ${{ inputs.push_stable && !startsWith(github.ref_name, 'release/') }}
