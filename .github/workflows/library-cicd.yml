@@ -104,7 +104,7 @@ jobs:
           dotnet-version: ${{ inputs.dotnet_sdk }}
 
     - name: Install workloads
-      if: ${{ inputs.install_workloads != "" }}
+      if: ${{ inputs.install_workloads }} != ""
       run: dotnet workload install ${{ inputs.install_workloads }} --version ${{ inputs.dotnet_sdk }}
 
     - name: Create NuGet Packages
