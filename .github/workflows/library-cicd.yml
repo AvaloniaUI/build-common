@@ -92,7 +92,7 @@ jobs:
 
   build:
     name: >-
-      build ${{ inputs.nuget_feed }}
+      build ${{ inputs.runs_on }}
     runs-on: ${{ inputs.runs_on }}
     needs: [validate]
     steps:
