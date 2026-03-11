@@ -14,5 +14,4 @@ Common build targets and scripts necessary for libraries and components
 
 3. Nuke extension, including BuildToLocalCache and simple obfuscation/ilmerge wrappers
 4. Avalonia strong name key and public key
-4. Babel obfuscator license file
 5. Some branding images, like default nuget package icon
