@@ -10,7 +10,8 @@ public static class IlMerge
 {
     public record MergeTargetFramework(
         AbsolutePath OutputDirectory,
-        IEnumerable<string> DependencyFileNames);
+        IEnumerable<string> DependencyFileNames,
+        IEnumerable<string>? ExtraLibraries = null);
 
     public static void Merge(
         Tool ilRepack,
@@ -21,7 +22,7 @@ public static class IlMerge
         AbsolutePath? publicApiList = null,
         AbsolutePath? signKey = null)
     {
-        foreach (var (outputDir, dependencyFiles) in targets)
+        foreach (var (outputDir, dependencyFiles, libs) in targets)
         {
             var dll = outputDir / (assemblyName + ".dll");
             var dependencies = dependencyFiles.Select(file => outputDir / (file + ".dll")).ToArray();
@@ -54,6 +55,16 @@ public static class IlMerge
                 args.AppendLiteral(" /keyfile:");
                 args.AppendFormatted(signKey);
                 args.AppendLiteral(" ");
+            }
+
+            if (libs is not null)
+            {
+                foreach (var lib in libs)
+                {
+                    args.AppendLiteral(" /lib:");
+                    args.AppendFormatted(lib, format:"nq");
+                    args.AppendLiteral(" ");
+                }
             }
 
             args.AppendLiteral($" /out:{dll} ");
