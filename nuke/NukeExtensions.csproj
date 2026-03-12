@@ -16,7 +16,6 @@
         <None Include="../targets/**/*.*" LinkBase="Targets" />
         <None Include="../branding/**/*.*" LinkBase="Branding" />
         <None Include="../avalonia.snk" />
-        <None Include="../babel.license" />
         <None Include="../babel.rules" />
         <None Include="../Common.props" />
     </ItemGroup>
