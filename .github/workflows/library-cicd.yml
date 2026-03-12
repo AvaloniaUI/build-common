@@ -65,6 +65,8 @@ on:
         required: true
       nuget_api_key:
         required: false
+      babel_license:
+        required: false
 
 jobs:
 
@@ -111,6 +113,8 @@ jobs:
 
     - name: Create NuGet Packages
       run: dotnet run --project ${{github.workspace}}/${{ inputs.nuke_project }} -- --target ${{ inputs.nuke_target }} --configuration ${{ inputs.configuration }} --output ${{github.workspace}}/artifacts/packages/
+      env:
+        BABEL_LICENSE: ${{ secrets.babel_license }}
 
     - name: Upload NuGet Artifacts
       uses: actions/upload-artifact@v4
