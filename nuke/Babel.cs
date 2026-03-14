@@ -38,10 +38,11 @@ public static class Babel
                 File.WriteAllText(licenseFile, licenseEnvValue);
                 tempLicense = true;
             }
-            else
-            {
-                throw new Exception("Babel license is missing");
-            }
+        }
+
+        if (!File.Exists(licenseFile))
+        {
+            Log.Warning("Babel license is not set");
         }
 
         try
