@@ -63,7 +63,7 @@ on:
         default: 9.0.308
     secrets:
       checkout_token:
-        required: true
+        required: false
       nuget_api_key:
         required: false
       babel_license:
