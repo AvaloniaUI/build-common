@@ -7,7 +7,7 @@ on:
         required: false
         type: string
         default: "auto"
-        description: "By default (auto) pushes only on main/master branch"
+        description: "By default (auto) pushes only on main/master/release* branch"
       nuget_feed:
         required: false
         type: string
@@ -77,7 +77,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Fail if push_package requires nuget_api_key but is missing
-        if: ${{ inputs.push_package == 'true' || (inputs.push_package == 'auto' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) }}
+        if: ${{ inputs.push_package == 'true' || (inputs.push_package == 'auto' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) || startsWith(github.ref_name, 'release/') }}
         run: |
           $key = "${{ secrets.nuget_api_key }}"
           if (-not $key) {
