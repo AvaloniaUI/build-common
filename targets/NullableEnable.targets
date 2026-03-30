@@ -1,13 +1,19 @@
 <Project>
-    <!-- 
+    <!--
       The Nullable annotations on netstandard2.0 are incomplete and incorrect in places. Ignore
       nullable warnings before .NET 6 and make them errors on later target frameworks.
+
+      Set SuppressNullableWarnings=false in pre-net6.0 projects to keep nullable warnings enabled.
+      Set DisableNullableErrors=true in net6.0+ projects to keep nullable warnings as warnings
+      instead of errors.
     -->
     <PropertyGroup Condition="'$(Nullable)' == ''">
         <Nullable>enable</Nullable>
     </PropertyGroup>
     <PropertyGroup Condition="'$(DisableNullableErrors)' != 'true'">
         <WarningsAsErrors Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net6.0'))">$(WarningsAsErrors);nullable</WarningsAsErrors>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(SuppressNullableWarnings)' != 'false'">
         <NoWarn Condition="!$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net6.0'))">$(NoWarn);nullable</NoWarn>
     </PropertyGroup>
 </Project>
