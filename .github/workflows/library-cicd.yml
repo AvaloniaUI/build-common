@@ -61,6 +61,10 @@ on:
         required: false
         type: string
         default: 9.0.308
+      environment:
+        required: false
+        type: string
+        default: ''
     secrets:
       checkout_token:
         required: false
@@ -140,6 +144,7 @@ jobs:
       push ${{ inputs.nuget_feed }}
     runs-on: ubuntu-latest
     needs: [build]
+    environment: ${{ inputs.environment }}
     if: ${{ inputs.push_package == 'true' || (inputs.push_package == 'auto' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref_name, 'release/'))) }}
     steps:
 
