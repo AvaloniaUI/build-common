@@ -79,6 +79,7 @@ jobs:
 
   validate:
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
     steps:
       - name: Fail if push_package requires nuget_api_key but is missing
         if: ${{ inputs.push_package == 'true' || (inputs.push_package == 'auto' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref_name, 'release/'))) }}
