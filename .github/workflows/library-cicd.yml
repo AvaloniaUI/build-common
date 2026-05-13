@@ -14,8 +14,8 @@ on:
         default: "https://api.nuget.org/v3/index.json"
       validate_release_branch:
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: "auto"
 
       create_github_release:
         required: false
@@ -60,7 +60,7 @@ on:
       dotnet_sdk:
         required: false
         type: string
-        default: 9.0.308
+        default: 10.0.204
       environment:
         required: false
         type: string
