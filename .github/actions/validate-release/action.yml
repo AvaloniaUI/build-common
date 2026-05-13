@@ -1,0 +1,37 @@
+name: Validate release
+description: Pre-flight checks for a library release pipeline.
+
+inputs:
+  validate_release_branch:
+    description: "Require the workflow to run on a release/* branch."
+    required: false
+    default: "false"
+  require_nuget_api_key:
+    description: "Fail if nuget_api_key is empty. Use when a publish step will follow."
+    required: false
+    default: "false"
+  nuget_api_key:
+    description: "The key to check when require_nuget_api_key is true. Pass via secrets."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Check release branch
+      if: ${{ inputs.validate_release_branch == 'true' && !startsWith(github.ref_name, 'release/') }}
+      shell: bash
+      run: |
+        echo "::error::validate_release_branch is true but '${{ github.ref_name }}' is not a release/* branch"
+        exit 1
+
+    - name: Check nuget_api_key present
+      if: ${{ inputs.require_nuget_api_key == 'true' }}
+      shell: bash
+      env:
+        KEY: ${{ inputs.nuget_api_key }}
+      run: |
+        if [ -z "$KEY" ]; then
+          echo "::error::nuget_api_key is required but empty"
+          exit 1
+        fi
