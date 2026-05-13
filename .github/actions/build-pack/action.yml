@@ -1,0 +1,66 @@
+name: Build and pack
+description: Install .NET, build, and produce NuGet packages as a workflow artifact.
+
+inputs:
+  dotnet_sdk:
+    description: ".NET SDK version (passed to setup-dotnet and workload install)."
+    required: false
+    default: "10.0.204"
+  install_workloads:
+    description: 'Space-separated workloads to install (e.g. "android ios"). Empty to skip.'
+    required: false
+    default: ""
+  configuration:
+    description: "Build configuration."
+    required: false
+    default: "Release"
+  nuke_project:
+    description: "Path to the NUKE _build.csproj, relative to repo root."
+    required: false
+    default: "build/_build.csproj"
+  nuke_target:
+    description: "NUKE target to invoke."
+    required: false
+    default: "CreateNugetPackages"
+  output_path:
+    description: "Output directory for .nupkg files, relative to repo root."
+    required: false
+    default: "artifacts/packages"
+  artifact_name:
+    description: "Name to upload the artifact under."
+    required: false
+    default: "nupkg"
+  artifact_glob:
+    description: "Glob (relative to output_path) of files to include in the artifact."
+    required: false
+    default: "**/*.nupkg"
+  artifact_retention_days:
+    description: "Artifact retention in days."
+    required: false
+    default: "1"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ inputs.dotnet_sdk }}
+
+    - name: Install workloads
+      if: ${{ inputs.install_workloads != '' }}
+      shell: pwsh
+      run: dotnet workload install ${{ inputs.install_workloads }} --version ${{ inputs.dotnet_sdk }}
+
+    - name: Create NuGet packages
+      shell: pwsh
+      run: |
+        dotnet run --project "${{ github.workspace }}/${{ inputs.nuke_project }}" -- `
+          --target ${{ inputs.nuke_target }} `
+          --configuration ${{ inputs.configuration }} `
+          --output "${{ github.workspace }}/${{ inputs.output_path }}/"
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: ${{ github.workspace }}/${{ inputs.output_path }}/${{ inputs.artifact_glob }}
+        retention-days: ${{ inputs.artifact_retention_days }}
