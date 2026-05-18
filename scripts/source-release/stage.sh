@@ -33,7 +33,21 @@ EOF
 fi
 
 repo_root=$(cd "$1" && pwd)
-allow_list=$(readlink -f "$2")
+
+# Resolve <allow-list> relative to <repo-root> when not absolute, so the path
+# semantics match what's documented above. `readlink -f` requires the file to
+# exist, so a missing allow-list would already error — but with a confusing
+# message; check explicitly first.
+case "$2" in
+    /*) allow_list="$2" ;;
+    *)  allow_list="$repo_root/$2" ;;
+esac
+if [[ ! -f "$allow_list" ]]; then
+    echo "::error::Allow-list file not found at '$2' (resolved to '$allow_list')." >&2
+    exit 1
+fi
+allow_list=$(readlink -f "$allow_list")
+
 staging_dir=$(readlink -m "$3")
 
 mkdir -p "$staging_dir"
@@ -123,10 +137,13 @@ for csproj in "${projects[@]}"; do
 done
 echo
 
-# Filter to repo-relative paths and dedupe.
+# Filter to repo-relative paths and dedupe. MSBuild reports .FullPath as
+# absolute, but the .Identity fallback can be relative; resolve from $repo_root
+# so a non-absolute path resolves the same way the project sees it, regardless
+# of this script's CWD.
 while IFS= read -r path; do
     [[ -z "$path" ]] && continue
-    abs=$(readlink -m "$path")
+    abs=$(cd "$repo_root" && readlink -m "$path")
     if [[ "$abs" == "$repo_root"/* ]]; then
         echo "${abs#"$repo_root"/}"
     fi

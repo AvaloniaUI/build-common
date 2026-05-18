@@ -50,10 +50,6 @@ on:
                 required: false
                 type: boolean
                 default: true
-            runs_on:
-                required: false
-                type: string
-                default: ubuntu-latest
             dotnet_sdk:
                 description: .NET SDK version. Must be 9.0+ for `dotnet msbuild -getItem/-getProperty`.
                 required: false
@@ -81,7 +77,7 @@ jobs:
 
     package:
         name: Scan & package source zip
-        runs-on: ${{ inputs.runs_on }}
+        runs-on: ubuntu-latest
         outputs:
             version: ${{ steps.version.outputs.version }}
             zip_name: ${{ steps.version.outputs.zip_name }}
@@ -224,7 +220,7 @@ jobs:
     verify-build:
         name: Verify zip is buildable
         needs: package
-        runs-on: ${{ inputs.runs_on }}
+        runs-on: ubuntu-latest
         steps:
             - name: Setup .NET
               uses: actions/setup-dotnet@v4
@@ -264,7 +260,7 @@ jobs:
         name: Upload zip to S3
         needs: [package, verify-build]
         if: ${{ inputs.upload_to_s3 }}
-        runs-on: ${{ inputs.runs_on }}
+        runs-on: ubuntu-latest
         steps:
             - name: Validate upload secrets
               shell: bash

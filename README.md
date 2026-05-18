@@ -66,3 +66,10 @@ The caller repository must:
   commit that contains `scripts/source-release/stage.sh`.
 - Provide an allow-list of customer-facing csproj paths at the configured
   path (default `.github/source-release/projects.txt`).
+- Have a `*.slnx` file at the repository root. The staging script reads it
+  to know the original solution filename and reuses it for the customer-
+  facing slnx so build instructions don't change. `.sln` is not currently
+  supported.
+
+The reusable workflow and `stage.sh` rely on Linux tooling — GNU `readlink`,
+`jq`, `zip`/`unzip`, the AWS CLI — and only run on `ubuntu-latest`.
