@@ -43,7 +43,12 @@ concurrency:
 
 jobs:
     source-release:
-        uses: AvaloniaUI/build-common/.github/workflows/source-release.yml@main
+        # Pin to a specific commit SHA (not a branch or tag) — any move of
+        # @main would otherwise immediately affect every consumer. Look up
+        # the latest source-release SHA from this repo's commit history and
+        # bump intentionally. Dependabot's `github-actions` ecosystem can
+        # automate this.
+        uses: AvaloniaUI/build-common/.github/workflows/source-release.yml@<sha>
         with:
             project_name: Avalonia.Controls.Example
             version: ${{ inputs.version }}                       # empty on release events
