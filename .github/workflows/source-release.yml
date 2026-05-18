@@ -29,6 +29,15 @@ on:
                 required: false
                 type: string
                 default: .github/source-release/projects.txt
+            version:
+                description: >-
+                    Explicit version override (no leading `v`). When set,
+                    takes precedence over `github.event.release.tag_name`.
+                    Intended for `workflow_dispatch` test runs where there is
+                    no release event to read a tag from.
+                required: false
+                type: string
+                default: ""
             s3_prefix:
                 description: >-
                     S3 key prefix for the uploaded zip. Defaults to
@@ -89,17 +98,27 @@ jobs:
               with:
                   dotnet-version: ${{ inputs.dotnet_sdk }}
 
-            - name: Resolve version from tag
+            - name: Resolve version
               id: version
               shell: bash
               env:
                   PROJECT_NAME: ${{ inputs.project_name }}
+                  EXPLICIT_VERSION: ${{ inputs.version }}
+                  RAW_TAG: ${{ github.event.release.tag_name }}
               run: |
                   set -euo pipefail
-                  raw_tag='${{ github.event.release.tag_name }}'
-                  version="${raw_tag#v}"
+                  if [[ -n "$EXPLICIT_VERSION" ]]; then
+                      source="input version='${EXPLICIT_VERSION}'"
+                      version="${EXPLICIT_VERSION#v}"
+                  elif [[ -n "$RAW_TAG" ]]; then
+                      source="release tag '${RAW_TAG}'"
+                      version="${RAW_TAG#v}"
+                  else
+                      echo "::error::No version available — neither inputs.version nor github.event.release.tag_name is set." >&2
+                      exit 1
+                  fi
                   if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
-                      echo "::error::Tag '$raw_tag' does not match expected version format (vMAJOR.MINOR.PATCH[-suffix])."
+                      echo "::error::${source} does not match expected version format (MAJOR.MINOR.PATCH[-suffix])."
                       exit 1
                   fi
                   dir_name="${PROJECT_NAME}-${version}"
@@ -107,7 +126,7 @@ jobs:
                   echo "version=${version}" >> "$GITHUB_OUTPUT"
                   echo "dir_name=${dir_name}" >> "$GITHUB_OUTPUT"
                   echo "zip_name=${zip_name}" >> "$GITHUB_OUTPUT"
-                  echo "Resolved version: ${version}"
+                  echo "Resolved version: ${version} (from ${source})"
 
             - name: Verify staging script is present
               shell: bash

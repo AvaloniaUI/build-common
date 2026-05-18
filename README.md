@@ -30,9 +30,15 @@ name: Source Release
 on:
     release:
         types: [published]
+    workflow_dispatch:
+        inputs:
+            version:
+                description: 'Version for the test zip (no leading v).'
+                required: true
+                default: 0.0.0-test1
 
 concurrency:
-    group: source-release-${{ github.event.release.tag_name }}
+    group: source-release-${{ github.event.release.tag_name || inputs.version }}
     cancel-in-progress: false
 
 jobs:
@@ -40,8 +46,9 @@ jobs:
         uses: AvaloniaUI/build-common/.github/workflows/source-release.yml@main
         with:
             project_name: Avalonia.Controls.Example
-            # allow_list: .github/source-release/projects.txt   # default
-            # upload_to_s3: true                                # default
+            version: ${{ inputs.version }}                       # empty on release events
+            upload_to_s3: ${{ github.event_name == 'release' }}  # only upload real releases
+            # allow_list: .github/source-release/projects.txt    # default
         secrets:
             checkout_token: ${{ secrets.SUBMODULE_TOKEN }}
             license_key: ${{ secrets.ACCELERATE_LICENSE_KEY }}
@@ -50,6 +57,8 @@ jobs:
             aws_region: ${{ secrets.AWS_REGION }}
             s3_bucket: ${{ secrets.SOURCE_S3_BUCKET }}
 ```
+
+The `workflow_dispatch` trigger lets you exercise the full pipeline (stage → scan → zip → verify-build) on demand without publishing a release. When dispatched, `version` is used in place of the release tag and `upload_to_s3` is false so the test zip stays in workflow artifacts only.
 
 The caller repository must:
 
