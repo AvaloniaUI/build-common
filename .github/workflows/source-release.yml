@@ -68,10 +68,14 @@ on:
                 type: string
                 default: ""
             upload_to_s3:
-                description: Whether to upload the zip to S3.
+                description: >-
+                    Whether to upload the zip to S3. Defaults to false so
+                    callers must opt in explicitly — release-triggered
+                    callers typically pass
+                    `${{ github.event_name == 'release' }}`.
                 required: false
                 type: boolean
-                default: true
+                default: false
             dotnet_sdk:
                 description: .NET SDK version. Must be 9.0+ for `dotnet msbuild -getItem/-getProperty`.
                 required: false
@@ -314,13 +318,14 @@ jobs:
                   fi
 
                   # Parse virtual-hosted-style URL into bucket + service endpoint.
-                  # Example: https://my-bucket.s3.fr-par.scw.cloud
-                  #   -> bucket=my-bucket, endpoint=https://s3.fr-par.scw.cloud
-                  if [[ "$S3_BUCKET_ENDPOINT" =~ ^(https?)://([^./]+)\.(.+)$ ]]; then
-                      scheme="${BASH_REMATCH[1]}"
+                  # Split on `.s3.` (rather than the first dot) so bucket names
+                  # containing dots — e.g. https://my.bucket.s3.us-east-1.amazonaws.com
+                  # — are parsed as bucket=`my.bucket`, not bucket=`my`.
+                  if [[ "$S3_BUCKET_ENDPOINT" =~ ^(https?://)(.+)\.s3\.(.+)$ ]]; then
+                      scheme_prefix="${BASH_REMATCH[1]}"
                       bucket="${BASH_REMATCH[2]}"
-                      host_rest="${BASH_REMATCH[3]}"
-                      endpoint="${scheme}://${host_rest}"
+                      host_after_s3="${BASH_REMATCH[3]}"
+                      endpoint="${scheme_prefix}s3.${host_after_s3}"
                   else
                       echo "::error::s3_bucket_endpoint must be a virtual-hosted-style URL like https://bucket.s3.region.example.com (got: ${S3_BUCKET_ENDPOINT})." >&2
                       exit 1

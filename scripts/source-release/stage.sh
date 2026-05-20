@@ -85,7 +85,8 @@ echo
 
 files_raw=$(mktemp)
 files_relative=$(mktemp)
-trap 'rm -f "$files_raw" "$files_relative"' EXIT
+tmp_files=("$files_raw" "$files_relative")
+trap 'rm -f "${tmp_files[@]}"' EXIT
 
 # Enumerate one project, target framework pair. Source items come from
 # `dotnet msbuild -getItem -getProperty` (JSON). Imported props/targets come
@@ -111,13 +112,15 @@ enumerate() {
 
     local pp_file
     pp_file=$(mktemp)
+    # Register with the script-level EXIT trap so the temp file is removed
+    # even if the dotnet call below fails and triggers `set -e`.
+    tmp_files+=("$pp_file")
     (cd "$repo_root" && dotnet msbuild "$csproj" \
         -pp:"$pp_file" \
         -p:TargetFramework="$tfm" \
         -nologo) > /dev/null
     # `dotnet msbuild -pp` writes CRLF line endings; strip CR before matching.
     tr -d '\r' < "$pp_file" | grep -E '^/.*\.(props|targets)$' >> "$files_raw" || true
-    rm -f "$pp_file"
 }
 
 for csproj in "${projects[@]}"; do
