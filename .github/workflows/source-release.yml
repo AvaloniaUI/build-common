@@ -335,16 +335,15 @@ jobs:
                   name: source-zip
                   path: ${{ runner.temp }}/zip
 
-            - name: Configure AWS credentials
-              uses: aws-actions/configure-aws-credentials@v4
-              with:
-                  aws-access-key-id: ${{ secrets.aws_access_key_id }}
-                  aws-secret-access-key: ${{ secrets.aws_secret_access_key }}
-                  aws-region: ${{ secrets.aws_region }}
-
             - name: Upload to S3
               shell: bash
               env:
+                  # Set creds directly rather than via aws-actions/configure-aws-credentials,
+                  # whose STS GetCallerIdentity call doesn't resolve against non-AWS S3
+                  # endpoints (e.g. Scaleway).
+                  AWS_ACCESS_KEY_ID: ${{ secrets.aws_access_key_id }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.aws_secret_access_key }}
+                  AWS_DEFAULT_REGION: ${{ secrets.aws_region }}
                   S3_BUCKET: ${{ steps.s3.outputs.bucket }}
                   S3_ENDPOINT: ${{ steps.s3.outputs.endpoint }}
                   S3_PREFIX: ${{ inputs.s3_prefix != '' && inputs.s3_prefix || inputs.project_name }}
