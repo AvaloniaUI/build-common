@@ -91,8 +91,15 @@ on:
             aws_secret_access_key:
                 required: false
             aws_region:
+                description: S3 region (e.g. `fr-par` for Scaleway, `us-east-1` for AWS).
                 required: false
-            s3_bucket:
+            s3_bucket_endpoint:
+                description: >-
+                    Virtual-hosted-style bucket URL, e.g.
+                    `https://my-bucket.s3.fr-par.scw.cloud` for Scaleway or
+                    `https://my-bucket.s3.us-east-1.amazonaws.com` for AWS.
+                    The workflow parses the bucket name and service endpoint
+                    out of this URL.
                 required: false
 
 jobs:
@@ -286,24 +293,41 @@ jobs:
         if: ${{ inputs.upload_to_s3 }}
         runs-on: ubuntu-latest
         steps:
-            - name: Validate upload secrets
+            - name: Validate upload secrets and parse bucket endpoint
+              id: s3
               shell: bash
               env:
                   AWS_ACCESS_KEY_ID: ${{ secrets.aws_access_key_id }}
                   AWS_SECRET_ACCESS_KEY: ${{ secrets.aws_secret_access_key }}
                   AWS_REGION: ${{ secrets.aws_region }}
-                  S3_BUCKET: ${{ secrets.s3_bucket }}
+                  S3_BUCKET_ENDPOINT: ${{ secrets.s3_bucket_endpoint }}
               run: |
                   set -euo pipefail
                   missing=()
                   [[ -z "$AWS_ACCESS_KEY_ID"     ]] && missing+=(aws_access_key_id)
                   [[ -z "$AWS_SECRET_ACCESS_KEY" ]] && missing+=(aws_secret_access_key)
                   [[ -z "$AWS_REGION"            ]] && missing+=(aws_region)
-                  [[ -z "$S3_BUCKET"             ]] && missing+=(s3_bucket)
+                  [[ -z "$S3_BUCKET_ENDPOINT"    ]] && missing+=(s3_bucket_endpoint)
                   if (( ${#missing[@]} > 0 )); then
                       echo "::error::upload_to_s3 is true but required secret(s) missing: ${missing[*]}" >&2
                       exit 1
                   fi
+
+                  # Parse virtual-hosted-style URL into bucket + service endpoint.
+                  # Example: https://my-bucket.s3.fr-par.scw.cloud
+                  #   -> bucket=my-bucket, endpoint=https://s3.fr-par.scw.cloud
+                  if [[ "$S3_BUCKET_ENDPOINT" =~ ^(https?)://([^./]+)\.(.+)$ ]]; then
+                      scheme="${BASH_REMATCH[1]}"
+                      bucket="${BASH_REMATCH[2]}"
+                      host_rest="${BASH_REMATCH[3]}"
+                      endpoint="${scheme}://${host_rest}"
+                  else
+                      echo "::error::s3_bucket_endpoint must be a virtual-hosted-style URL like https://bucket.s3.region.example.com (got: ${S3_BUCKET_ENDPOINT})." >&2
+                      exit 1
+                  fi
+                  echo "bucket=${bucket}" >> "$GITHUB_OUTPUT"
+                  echo "endpoint=${endpoint}" >> "$GITHUB_OUTPUT"
+                  echo "Parsed bucket=${bucket}, endpoint=${endpoint}"
 
             - name: Download source zip
               uses: actions/download-artifact@v4
@@ -321,7 +345,8 @@ jobs:
             - name: Upload to S3
               shell: bash
               env:
-                  S3_BUCKET: ${{ secrets.s3_bucket }}
+                  S3_BUCKET: ${{ steps.s3.outputs.bucket }}
+                  S3_ENDPOINT: ${{ steps.s3.outputs.endpoint }}
                   S3_PREFIX: ${{ inputs.s3_prefix != '' && inputs.s3_prefix || inputs.project_name }}
                   ZIP_NAME: ${{ needs.package.outputs.zip_name }}
                   VERSION: ${{ needs.package.outputs.version }}
@@ -332,6 +357,7 @@ jobs:
                   s3_uri="s3://${S3_BUCKET}/${s3_key}"
 
                   aws s3 cp "$zip_path" "$s3_uri" \
+                      --endpoint-url "$S3_ENDPOINT" \
                       --no-progress \
                       --content-type application/zip
 
@@ -340,4 +366,5 @@ jobs:
                       echo ""
                       echo "- **Version:** \`${VERSION}\`"
                       echo "- **S3 URI:** \`${s3_uri}\`"
+                      echo "- **Endpoint:** \`${S3_ENDPOINT}\`"
                   } >> "$GITHUB_STEP_SUMMARY"

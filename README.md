@@ -68,10 +68,10 @@ jobs:
         secrets:
             checkout_token: ${{ secrets.SUBMODULE_TOKEN }}
             license_key: ${{ secrets.ACCELERATE_LICENSE_KEY }}
-            aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-            aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-            aws_region: ${{ secrets.AWS_REGION }}
-            s3_bucket: ${{ secrets.SOURCE_S3_BUCKET }}
+            aws_access_key_id: ${{ secrets.COMP_SOURCE_WRITE_SCW_ACCESS_KEY }}
+            aws_secret_access_key: ${{ secrets.COMP_SOURCE_WRITE_SCW_SECRET_KEY }}
+            aws_region: fr-par
+            s3_bucket_endpoint: ${{ vars.COMP_SOURCE_BUCKET_ENDPOINT }}
 ```
 
 The `workflow_dispatch` trigger lets you exercise the full pipeline (stage → scan → zip → verify-build) on demand without publishing a release, and can also repackage historic releases by setting `ref` to the relevant tag or commit SHA together with the matching `version`. The `upload_to_s3` checkbox controls whether the resulting zip is shipped to S3 — leave it off for test runs and enable it when intentionally re-publishing a historic version. Release events always upload regardless.
