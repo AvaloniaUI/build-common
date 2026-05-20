@@ -46,7 +46,17 @@ on:
                     Explicit version override (no leading `v`). When set,
                     takes precedence over `github.event.release.tag_name`.
                     Intended for `workflow_dispatch` test runs where there is
-                    no release event to read a tag from.
+                    no release event to read a tag from, and for repackaging
+                    historic releases.
+                required: false
+                type: string
+                default: ""
+            ref:
+                description: >-
+                    Git commitish (branch, tag, or SHA) to check out before
+                    staging. When empty, uses the ref that triggered the
+                    workflow. Intended for repackaging historic releases via
+                    `workflow_dispatch`.
                 required: false
                 type: string
                 default: ""
@@ -100,6 +110,7 @@ jobs:
               with:
                   submodules: recursive
                   token: ${{ secrets.checkout_token }}
+                  ref: ${{ inputs.ref }}
 
             - name: Setup .NET
               uses: actions/setup-dotnet@v4

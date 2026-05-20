@@ -32,10 +32,19 @@ on:
         types: [published]
     workflow_dispatch:
         inputs:
+            ref:
+                description: 'Commitish (branch, tag, or SHA) to package. Leave empty to use the dispatched branch.'
+                required: false
+                default: ''
             version:
-                description: 'Version for the test zip (no leading v).'
+                description: 'Version for the zip (no leading v).'
                 required: true
                 default: 0.0.0-test1
+            upload_to_s3:
+                description: 'Upload the zip to S3.'
+                required: false
+                type: boolean
+                default: false
 
 concurrency:
     group: source-release-${{ github.event.release.tag_name || inputs.version }}
@@ -51,8 +60,9 @@ jobs:
         uses: AvaloniaUI/build-common/.github/workflows/source-release.yml@<sha>
         with:
             project_name: Avalonia.Controls.Example
+            ref: ${{ inputs.ref }}                               # empty on release events
             version: ${{ inputs.version }}                       # empty on release events
-            upload_to_s3: ${{ github.event_name == 'release' }}  # only upload real releases
+            upload_to_s3: ${{ github.event_name == 'release' || inputs.upload_to_s3 }}
             # allow_list: .github/source-release/projects.txt    # default
             # solution_file: Avalonia.Controls.Example.slnx       # required only if multiple .slnx exist at the repo root
         secrets:
@@ -64,7 +74,7 @@ jobs:
             s3_bucket: ${{ secrets.SOURCE_S3_BUCKET }}
 ```
 
-The `workflow_dispatch` trigger lets you exercise the full pipeline (stage → scan → zip → verify-build) on demand without publishing a release. When dispatched, `version` is used in place of the release tag and `upload_to_s3` is false so the test zip stays in workflow artifacts only.
+The `workflow_dispatch` trigger lets you exercise the full pipeline (stage → scan → zip → verify-build) on demand without publishing a release, and can also repackage historic releases by setting `ref` to the relevant tag or commit SHA together with the matching `version`. The `upload_to_s3` checkbox controls whether the resulting zip is shipped to S3 — leave it off for test runs and enable it when intentionally re-publishing a historic version. Release events always upload regardless.
 
 The caller repository must:
 
