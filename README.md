@@ -54,6 +54,7 @@ jobs:
             version: ${{ inputs.version }}                       # empty on release events
             upload_to_s3: ${{ github.event_name == 'release' }}  # only upload real releases
             # allow_list: .github/source-release/projects.txt    # default
+            # solution_file: Avalonia.Controls.Example.slnx       # required only if multiple .slnx exist at the repo root
         secrets:
             checkout_token: ${{ secrets.SUBMODULE_TOKEN }}
             license_key: ${{ secrets.ACCELERATE_LICENSE_KEY }}
@@ -73,8 +74,10 @@ The caller repository must:
   path (default `.github/source-release/projects.txt`).
 - Have a `*.slnx` file at the repository root. The staging script reads it
   to know the original solution filename and reuses it for the customer-
-  facing slnx so build instructions don't change. `.sln` is not currently
-  supported.
+  facing slnx so build instructions don't change. If multiple `.slnx` files
+  exist at the root, set the `solution_file` input to disambiguate;
+  otherwise the first one in filesystem order is picked. `.sln` is not
+  currently supported.
 
 The reusable workflow and `stage.sh` rely on Linux tooling — GNU `readlink`,
 `jq`, `zip`/`unzip`, the AWS CLI — and only run on `ubuntu-latest`.

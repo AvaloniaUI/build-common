@@ -21,13 +21,16 @@ set -euo pipefail
 
 if [[ $# -lt 3 ]]; then
     cat >&2 <<'EOF'
-usage: stage.sh <repo-root> <allow-list> <staging-dir>
+usage: stage.sh <repo-root> <allow-list> <staging-dir> [solution-file]
 
-  <repo-root>    Path to the repository root.
-  <allow-list>   Text file listing one customer-facing csproj per line
-                 (paths relative to <repo-root>). Blank lines and lines
-                 starting with `#` are ignored.
-  <staging-dir>  Output directory. Will be created if missing.
+  <repo-root>     Path to the repository root.
+  <allow-list>    Text file listing one customer-facing csproj per line
+                  (paths relative to <repo-root>). Blank lines and lines
+                  starting with `#` are ignored.
+  <staging-dir>   Output directory. Will be created if missing.
+  [solution-file] Optional .slnx filename at <repo-root> to mirror as the
+                  customer-facing solution. When omitted, the first .slnx
+                  at <repo-root> (filesystem order) is used.
 EOF
     exit 64
 fi
@@ -49,6 +52,7 @@ fi
 allow_list=$(readlink -f "$allow_list")
 
 staging_dir=$(readlink -m "$3")
+solution_file="${4:-}"
 
 mkdir -p "$staging_dir"
 
@@ -162,11 +166,22 @@ while IFS= read -r rel; do
 done < "$files_relative"
 
 # Generate a customer-facing slnx referencing only the allow-listed projects.
-# Reuse the original slnx's filename so customer commands are unchanged.
-orig_slnx=$(find "$repo_root" -maxdepth 1 -name '*.slnx' -print -quit)
-if [[ -z "$orig_slnx" ]]; then
-    echo "::error::No .slnx found at $repo_root." >&2
-    exit 1
+# Reuse the original slnx's filename so customer commands are unchanged. When
+# the caller specifies a solution file explicitly, honor it; otherwise pick the
+# first .slnx at the repo root (which is non-deterministic if there are several,
+# hence the explicit input).
+if [[ -n "$solution_file" ]]; then
+    orig_slnx="$repo_root/$solution_file"
+    if [[ ! -f "$orig_slnx" ]]; then
+        echo "::error::Specified solution file not found at $orig_slnx." >&2
+        exit 1
+    fi
+else
+    orig_slnx=$(find "$repo_root" -maxdepth 1 -name '*.slnx' -print -quit)
+    if [[ -z "$orig_slnx" ]]; then
+        echo "::error::No .slnx found at $repo_root." >&2
+        exit 1
+    fi
 fi
 slnx_name=$(basename "$orig_slnx")
 customer_slnx="$staging_dir/$slnx_name"

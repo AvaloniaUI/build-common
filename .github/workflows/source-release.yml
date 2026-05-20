@@ -29,6 +29,18 @@ on:
                 required: false
                 type: string
                 default: .github/source-release/projects.txt
+            solution_file:
+                description: >-
+                    Filename of the .slnx at the caller's repo root to mirror
+                    into the customer zip. The staged solution reuses this
+                    filename and references only the allow-listed projects.
+                    When unset, the stager picks the first .slnx at the repo
+                    root (filesystem order) — fine for repos with a single
+                    .slnx, but ambiguous otherwise. Set explicitly when the
+                    repo has multiple .slnx files (e.g. a `*.ci.slnx`).
+                required: false
+                type: string
+                default: ""
             version:
                 description: >-
                     Explicit version override (no leading `v`). When set,
@@ -143,7 +155,8 @@ jobs:
                   bash "$GITHUB_WORKSPACE/build-common/scripts/source-release/stage.sh" \
                       "$GITHUB_WORKSPACE" \
                       "${{ inputs.allow_list }}" \
-                      "$staging_dir"
+                      "$staging_dir" \
+                      "${{ inputs.solution_file }}"
                   echo "staging_dir=${staging_dir}" >> "$GITHUB_ENV"
                   echo "staging_root=${staging_root}" >> "$GITHUB_ENV"
 
