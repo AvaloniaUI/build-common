@@ -72,7 +72,7 @@ on:
                     Whether to upload the zip to S3. Defaults to false so
                     callers must opt in explicitly — release-triggered
                     callers typically pass
-                    `${{ github.event_name == 'release' }}`.
+                    `github.event_name == 'release'`.
                 required: false
                 type: boolean
                 default: false
