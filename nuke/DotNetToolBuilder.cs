@@ -11,7 +11,7 @@ namespace NukeExtensions;
 
 public record NuGetPackageInfo(string PackageId, NuGetVersion Version)
 {
-    public string ProjectUrl { get; init; } = "https://avaloniaui.net/accelerate";
+    public string ProjectUrl { get; init; } = "https://avaloniaui.net";
     public string? Author { get; init; } = "AvaloniaUI OÜ";
     public string? Copyright { get; init; } = $"Copyright 2019-{DateTime.Now.Year} © AvaloniaUI OÜ";
     public string? Description { get; init; } = PackageId;
