@@ -40,8 +40,8 @@ on:
                 description: 'Version for the zip (no leading v).'
                 required: true
                 default: 0.0.0-test1
-            upload_to_s3:
-                description: 'Upload the zip to S3.'
+            upload:
+                description: 'Upload the zip to Release Manager.'
                 required: false
                 type: boolean
                 default: false
@@ -62,19 +62,18 @@ jobs:
             project_name: Avalonia.Controls.Example
             ref: ${{ inputs.ref }}                               # empty on release events
             version: ${{ inputs.version }}                       # empty on release events
-            upload_to_s3: ${{ github.event_name == 'release' || inputs.upload_to_s3 }}
+            upload: ${{ github.event_name == 'release' || inputs.upload }}
+            release_manager_base_url: ${{ vars.RELEASE_MANAGER_BASE_URL }}
+            release_manager_product: ${{ vars.RELEASE_MANAGER_PRODUCT_NAME }}
             # allow_list: .github/source-release/projects.txt    # default
             # solution_file: Avalonia.Controls.Example.slnx       # required only if multiple .slnx exist at the repo root
         secrets:
             checkout_token: ${{ secrets.SUBMODULE_TOKEN }}
             license_key: ${{ secrets.ACCELERATE_LICENSE_KEY }}
-            aws_access_key_id: ${{ secrets.COMP_SOURCE_WRITE_SCW_ACCESS_KEY }}
-            aws_secret_access_key: ${{ secrets.COMP_SOURCE_WRITE_SCW_SECRET_KEY }}
-            aws_region: fr-par
-            s3_bucket_endpoint: ${{ vars.COMP_SOURCE_BUCKET_ENDPOINT }}
+            release_manager_api_key: ${{ secrets.RELEASE_MANAGER_API_KEY }}
 ```
 
-The `workflow_dispatch` trigger lets you exercise the full pipeline (stage → scan → zip → verify-build) on demand without publishing a release, and can also repackage historic releases by setting `ref` to the relevant tag or commit SHA together with the matching `version`. The `upload_to_s3` checkbox controls whether the resulting zip is shipped to S3 — leave it off for test runs and enable it when intentionally re-publishing a historic version. Release events always upload regardless.
+The `workflow_dispatch` trigger lets you exercise the full pipeline (stage → scan → zip → verify-build) on demand without publishing a release, and can also repackage historic releases by setting `ref` to the relevant tag or commit SHA together with the matching `version`. The `upload` checkbox controls whether the resulting zip is shipped to Release Manager (as a `generic` artifact) — leave it off for test runs and enable it when intentionally re-publishing a historic version. Release events always upload regardless.
 
 The caller repository must:
 
@@ -90,4 +89,4 @@ The caller repository must:
   currently supported.
 
 The reusable workflow and `stage.sh` rely on Linux tooling — GNU `readlink`,
-`jq`, `zip`/`unzip`, the AWS CLI — and only run on `ubuntu-latest`.
+`jq`, `zip`/`unzip`, `curl` — and only run on `ubuntu-latest`.
