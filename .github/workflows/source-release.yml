@@ -328,17 +328,24 @@ jobs:
                   RM_BASE_URL: ${{ inputs.release_manager_base_url }}
                   RM_PRODUCT: ${{ inputs.release_manager_product }}
                   RM_API_KEY: ${{ secrets.release_manager_api_key }}
+                  PROJECT_NAME: ${{ inputs.project_name }}
                   ZIP_NAME: ${{ needs.package.outputs.zip_name }}
                   VERSION: ${{ needs.package.outputs.version }}
               run: |
                   set -euo pipefail
                   zip_path="${RUNNER_TEMP}/zip/${ZIP_NAME}"
                   base_url="${RM_BASE_URL%/}"
-                  # Release Manager generic-artifact upload (web-api §13.2):
-                  # PUT <base>/api/upload/<product>/<version>/generic/<filename>
-                  upload_url="${base_url}/api/upload/${RM_PRODUCT}/${VERSION}/generic/${ZIP_NAME}"
+                  # The generic-artifact *filename* is Release Manager's stable
+                  # identifier for the artifact within a product, so it must NOT
+                  # contain the version — the version already lives in the URL
+                  # path. A versioned filename would register a brand-new
+                  # artifact identity for every release. Upload the (versioned)
+                  # zip on disk under a version-independent name.
+                  artifact_name="${PROJECT_NAME}.zip"
+                  # PUT <base>/api/upload/<product>/<version>/generic/<filename>  (web-api §13.2)
+                  upload_url="${base_url}/api/upload/${RM_PRODUCT}/${VERSION}/generic/${artifact_name}"
 
-                  echo "Uploading ${ZIP_NAME} (version ${VERSION}) to ${upload_url}"
+                  echo "Uploading ${ZIP_NAME} as ${artifact_name} (version ${VERSION}) to ${upload_url}"
                   http_code=$(curl -sS -o "${RUNNER_TEMP}/rm_response.json" -w '%{http_code}' \
                       -X PUT \
                       -H "Authorization: Bearer ${RM_API_KEY}" \
@@ -360,6 +367,6 @@ jobs:
                       echo ""
                       echo "- **Version:** \`${VERSION}\`"
                       echo "- **Product:** \`${RM_PRODUCT}\`"
-                      echo "- **Artifact:** \`${ZIP_NAME}\` (generic)"
+                      echo "- **Artifact:** \`${artifact_name}\` (generic)"
                       echo "- **Endpoint:** \`${upload_url}\`"
                   } >> "$GITHUB_STEP_SUMMARY"
