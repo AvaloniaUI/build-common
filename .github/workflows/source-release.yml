@@ -357,7 +357,6 @@ jobs:
                   RM_BASE_URL: ${{ inputs.release_manager_base_url }}
                   RM_PRODUCT: ${{ inputs.release_manager_product }}
                   RM_API_KEY: ${{ secrets.release_manager_api_key }}
-                  PROJECT_NAME: ${{ inputs.project_name }}
                   ZIP_NAME: ${{ needs.package.outputs.zip_name }}
                   VERSION: ${{ needs.package.outputs.version }}
               run: |
@@ -365,12 +364,13 @@ jobs:
                   zip_path="${RUNNER_TEMP}/zip/${ZIP_NAME}"
                   base_url="${RM_BASE_URL%/}"
                   # The generic-artifact *filename* is Release Manager's stable
-                  # identifier for the artifact within a product, so it must NOT
-                  # contain the version — the version already lives in the URL
-                  # path. A versioned filename would register a brand-new
+                  # identifier for the artifact within a product, so it is the
+                  # fixed literal `source.zip` — version-independent (the version
+                  # already lives in the URL path) and the same across every repo.
+                  # A versioned or per-project filename would register a brand-new
                   # artifact identity for every release. Upload the (versioned)
-                  # zip on disk under a version-independent name.
-                  artifact_name="${PROJECT_NAME}.zip"
+                  # zip on disk under this version-independent name.
+                  artifact_name="source.zip"
                   # PUT <base>/api/upload/<product>/<version>/generic/<filename>  (web-api §13.2)
                   upload_url="${base_url}/api/upload/${RM_PRODUCT}/${VERSION}/generic/${artifact_name}"
 
