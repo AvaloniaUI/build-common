@@ -15,9 +15,22 @@
 # is generated at the staging root, reusing the original slnx's filename so
 # customer build instructions don't change.
 #
-# Requires: bash, dotnet (9.0+ for -getItem/-getProperty), jq.
+# Requires: bash, dotnet (9.0+ for -getItem/-getProperty), jq (and python3 on
+# platforms without GNU `readlink -m`, e.g. macOS).
 
 set -euo pipefail
+
+# Portable replacement for GNU `readlink -m`/`-f` (canonicalize a path, allowing
+# non-existent components). BSD/macOS `readlink` has no `-m`, so fall back to
+# python3 (present on every GitHub runner) when GNU readlink isn't available —
+# letting this script also run on a macOS agent (e.g. to stage mobile TFMs).
+canonicalize() {
+    if readlink -m / >/dev/null 2>&1; then
+        readlink -m "$1"
+    else
+        python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"
+    fi
+}
 
 if [[ $# -lt 3 ]]; then
     cat >&2 <<'EOF'
@@ -38,9 +51,8 @@ fi
 repo_root=$(cd "$1" && pwd)
 
 # Resolve <allow-list> relative to <repo-root> when not absolute, so the path
-# semantics match what's documented above. `readlink -f` requires the file to
-# exist, so a missing allow-list would already error — but with a confusing
-# message; check explicitly first.
+# semantics match what's documented above. Check existence explicitly first so a
+# missing allow-list gives a clear message rather than a confusing canonicalize error.
 case "$2" in
     /*) allow_list="$2" ;;
     *)  allow_list="$repo_root/$2" ;;
@@ -49,9 +61,9 @@ if [[ ! -f "$allow_list" ]]; then
     echo "::error::Allow-list file not found at '$2' (resolved to '$allow_list')." >&2
     exit 1
 fi
-allow_list=$(readlink -f "$allow_list")
+allow_list=$(canonicalize "$allow_list")
 
-staging_dir=$(readlink -m "$3")
+staging_dir=$(canonicalize "$3")
 solution_file="${4:-}"
 
 mkdir -p "$staging_dir"
@@ -150,7 +162,7 @@ echo
 # of this script's CWD.
 while IFS= read -r path; do
     [[ -z "$path" ]] && continue
-    abs=$(cd "$repo_root" && readlink -m "$path")
+    abs=$(cd "$repo_root" && canonicalize "$path")
     if [[ "$abs" == "$repo_root"/* ]]; then
         echo "${abs#"$repo_root"/}"
     fi

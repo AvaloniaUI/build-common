@@ -118,5 +118,29 @@ The caller repository must:
   otherwise the first one in filesystem order is picked. `.sln` is not
   currently supported.
 
-The reusable workflow and `stage.sh` rely on Linux tooling — GNU `readlink`,
-`jq`, `zip`/`unzip`, `curl` — and only run on `ubuntu-latest`.
+The staging and verify-build jobs run on `ubuntu-latest` by default. For a library
+with **mobile (iOS/Android) target frameworks**, set `runs_on: macos-latest` and
+`install_workloads: android ios` on the caller: on Linux those TFMs are commonly
+dropped, so their sources would neither be staged nor verified, whereas a macOS agent
+stages and builds them. `stage.sh` needs `jq`, `zip`/`unzip`, `curl`, and `python3`
+(a portable fallback for GNU `readlink`), all present on the GitHub ubuntu and macOS
+runners. The Release Manager upload job always runs on `ubuntu-latest`.
+
+```yaml
+    source-release:
+        needs: setup
+        uses: AvaloniaUI/build-common/.github/workflows/source-release.yml@<sha>
+        with:
+            project_name: Avalonia.Controls.Example
+            version: ${{ needs.setup.outputs.version }}
+            upload: ${{ needs.setup.outputs.upload == 'true' }}
+            runs_on: macos-latest          # mobile TFMs need a macOS agent
+            install_workloads: android ios
+            dotnet_sdk: 10.0.102
+            release_manager_base_url: ${{ vars.RELEASE_MANAGER_BASE_URL }}
+            release_manager_product: ${{ vars.RELEASE_MANAGER_PRODUCT_NAME }}
+        secrets:
+            checkout_token: ${{ secrets.SUBMODULE_TOKEN }}
+            license_key: ${{ secrets.ACCELERATE_LICENSE_KEY }}
+            release_manager_api_key: ${{ secrets.RELEASE_MANAGER_API_KEY }}
+```

@@ -94,6 +94,24 @@ on:
                 required: false
                 type: string
                 default: 9.0.x
+            runs_on:
+                description: >-
+                    Runner for the staging and verify-build jobs. Defaults to
+                    `ubuntu-latest`. Set to `macos-latest` for libraries with
+                    mobile (iOS/Android) target frameworks: on Linux those TFMs
+                    are commonly dropped, so their sources would neither be
+                    staged nor verified — a macOS agent stages and builds them.
+                required: false
+                type: string
+                default: ubuntu-latest
+            install_workloads:
+                description: >-
+                    Space-separated .NET workloads to install before staging and
+                    verify-build (e.g. `android ios`). Required, together with a
+                    macOS `runs_on`, to stage and verify mobile target frameworks.
+                required: false
+                type: string
+                default: ""
         secrets:
             checkout_token:
                 description: PAT with access to private submodules.
@@ -113,7 +131,7 @@ jobs:
 
     package:
         name: Scan & package source zip
-        runs-on: ubuntu-latest
+        runs-on: ${{ inputs.runs_on }}
         outputs:
             version: ${{ steps.version.outputs.version }}
             zip_name: ${{ steps.version.outputs.zip_name }}
@@ -130,6 +148,11 @@ jobs:
               uses: actions/setup-dotnet@v4
               with:
                   dotnet-version: ${{ inputs.dotnet_sdk }}
+
+            - name: Install .NET workloads
+              if: ${{ inputs.install_workloads != '' }}
+              shell: bash
+              run: dotnet workload install ${{ inputs.install_workloads }}
 
             - name: Resolve version
               id: version
@@ -258,12 +281,17 @@ jobs:
     verify-build:
         name: Verify zip is buildable
         needs: package
-        runs-on: ubuntu-latest
+        runs-on: ${{ inputs.runs_on }}
         steps:
             - name: Setup .NET
               uses: actions/setup-dotnet@v4
               with:
                   dotnet-version: ${{ inputs.dotnet_sdk }}
+
+            - name: Install .NET workloads
+              if: ${{ inputs.install_workloads != '' }}
+              shell: bash
+              run: dotnet workload install ${{ inputs.install_workloads }}
 
             - name: Download source zip
               uses: actions/download-artifact@v4
