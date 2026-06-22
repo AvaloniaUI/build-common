@@ -22,12 +22,16 @@ Common build targets and scripts necessary for libraries and components
 ## Source-release workflow
 
 Drop the following into `.github/workflows/source-release.yml` in any consumer
-repository to wire up source-zip packaging on release publish:
+repository to wire up source-zip packaging on a `release/*` branch push. A small
+`setup` job derives the version from the branch name and passes it to the reusable
+workflow, so the source zip ships in the same release as everything else:
 
 ```yaml
 name: Source Release
 
 on:
+    push:
+        branches: [ "release/*" ]
     release:
         types: [published]
     workflow_dispatch:
@@ -47,11 +51,32 @@ on:
                 default: false
 
 concurrency:
-    group: source-release-${{ github.event.release.tag_name || inputs.version }}
+    group: source-release-${{ github.event.release.tag_name || inputs.version || github.ref }}
     cancel-in-progress: false
 
 jobs:
+    # Derive the version (and whether to upload) from whichever trigger fired. A
+    # release/* branch push and a published release always upload.
+    setup:
+        runs-on: ubuntu-latest
+        outputs:
+            version: ${{ steps.v.outputs.version }}
+            upload: ${{ steps.v.outputs.upload }}
+        steps:
+            - id: v
+              run: |
+                  set -euo pipefail
+                  case "${{ github.event_name }}" in
+                      push)    ver="${GITHUB_REF#refs/heads/release/}"; upload=true ;;
+                      release) ver="${{ github.event.release.tag_name }}"; upload=true ;;
+                      *)       ver="${{ inputs.version }}"; upload="${{ inputs.upload }}" ;;
+                  esac
+                  ver="${ver#v}"
+                  echo "version=$ver" >> "$GITHUB_OUTPUT"
+                  echo "upload=$upload" >> "$GITHUB_OUTPUT"
+
     source-release:
+        needs: setup
         # Pin to a specific commit SHA (not a branch or tag) — any move of
         # @main would otherwise immediately affect every consumer. Look up
         # the latest source-release SHA from this repo's commit history and
@@ -60,9 +85,9 @@ jobs:
         uses: AvaloniaUI/build-common/.github/workflows/source-release.yml@<sha>
         with:
             project_name: Avalonia.Controls.Example
-            ref: ${{ inputs.ref }}                               # empty on release events
-            version: ${{ inputs.version }}                       # empty on release events
-            upload: ${{ github.event_name == 'release' || inputs.upload }}
+            ref: ${{ inputs.ref }}                               # empty outside workflow_dispatch
+            version: ${{ needs.setup.outputs.version }}
+            upload: ${{ needs.setup.outputs.upload == 'true' }}
             release_manager_base_url: ${{ vars.RELEASE_MANAGER_BASE_URL }}
             release_manager_product: ${{ vars.RELEASE_MANAGER_PRODUCT_NAME }}
             # allow_list: .github/source-release/projects.txt    # default
@@ -73,7 +98,12 @@ jobs:
             release_manager_api_key: ${{ secrets.RELEASE_MANAGER_API_KEY }}
 ```
 
-The `workflow_dispatch` trigger lets you exercise the full pipeline (stage → scan → zip → verify-build) on demand without publishing a release, and can also repackage historic releases by setting `ref` to the relevant tag or commit SHA together with the matching `version`. The `upload` checkbox controls whether the resulting zip is shipped to Release Manager (as a `generic` artifact) — leave it off for test runs and enable it when intentionally re-publishing a historic version. Release events always upload regardless.
+A push to a `release/X.Y.Z` branch packages and uploads the source zip for version
+`X.Y.Z`. The `workflow_dispatch` trigger lets you exercise the full pipeline
+(stage → scan → zip → verify-build) on demand, and can also repackage historic
+releases by setting `ref` to the relevant tag or commit SHA together with the matching
+`version`; its `upload` checkbox controls whether that run ships to Release Manager (as
+a `generic` artifact) — leave it off for test runs.
 
 The caller repository must:
 

@@ -1,7 +1,9 @@
 name: Source Release
 
-# Reusable workflow that packages and ships a customer-facing source zip when a
-# library is released. Driven by an allow-list of customer-facing csproj paths
+# Reusable workflow that packages and ships a customer-facing source zip as part of
+# a release. Callers invoke it on a push to a release/* branch, deriving the version
+# from the branch name and passing it as `version`, so the source zip ships alongside
+# the rest of the release. Driven by an allow-list of customer-facing csproj paths
 # in the caller repo; uses scripts/source-release/stage.sh from build-common
 # (consumed via the caller's submodule pin) to enumerate source files via
 # MSBuild and stage them, then scans, zips, verifies the zip builds, and
@@ -44,11 +46,10 @@ on:
                 default: ""
             version:
                 description: >-
-                    Explicit version override (no leading `v`). When set,
-                    takes precedence over `github.event.release.tag_name`.
-                    Intended for `workflow_dispatch` test runs where there is
-                    no release event to read a tag from, and for repackaging
-                    historic releases.
+                    Version to package (no leading `v`). Callers derive it from
+                    the release/* branch name and pass it here; it takes
+                    precedence over `github.event.release.tag_name`. Also used by
+                    `workflow_dispatch` runs and for repackaging historic releases.
                 required: false
                 type: string
                 default: ""
@@ -64,9 +65,9 @@ on:
             upload:
                 description: >-
                     Whether to upload the zip to Release Manager. Defaults to
-                    false so callers must opt in explicitly — release-triggered
-                    callers typically pass
-                    `github.event_name == 'release'`.
+                    false so callers must opt in explicitly — callers pass `true`
+                    on a release/* branch push (the release path) and gate it
+                    behind a checkbox for `workflow_dispatch` test runs.
                 required: false
                 type: boolean
                 default: false
