@@ -482,6 +482,13 @@ public static class SbomGenerator
 
         // These are shipped libraries, not applications (cyclonedx-dotnet's default type).
         component["type"] = "library";
+        // The .nuspec is authoritative for the shipped version; a build-supplied version that
+        // disagrees means the SBOM is being generated against stale packages, and silently
+        // keeping it would leave the root component's version and purl inconsistent.
+        var scannedVersion = component["version"]?.GetValue<string>();
+        if (scannedVersion is not null && scannedVersion != meta.Version)
+            Warning($"SBOM: '{meta.Id}' was scanned as version '{scannedVersion}' but the shipped package is '{meta.Version}' - are the packages stale? Recording '{meta.Version}'.");
+        component["version"] = meta.Version;
         component["purl"] = $"pkg:nuget/{meta.Id}@{meta.Version}";
         if (meta.Description is not null)
             component["description"] = meta.Description;
@@ -733,7 +740,9 @@ public static class SbomGenerator
     {
         using var file = File.Open(nupkgPath, FileMode.Open, FileAccess.Read);
         using var zip = new ZipArchive(file, ZipArchiveMode.Read);
-        var nuspecEntry = zip.Entries.First(e => e.FullName.EndsWith(".nuspec", StringComparison.Ordinal) && e.FullName == e.Name);
+        // Case-insensitive to match NuGet's own PackageArchiveReader manifest lookup.
+        var nuspecEntry = zip.Entries.First(e =>
+            e.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase) && e.FullName == e.Name);
         using var nuspecStream = nuspecEntry.Open();
         var metadata = XDocument.Load(nuspecStream).Root!
             .Elements().First(x => x.Name.LocalName == "metadata");
