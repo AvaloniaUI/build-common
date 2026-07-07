@@ -1,0 +1,374 @@
+name: Source Release
+
+# Reusable workflow that packages and ships a customer-facing source zip when a
+# library is released. Driven by an allow-list of customer-facing csproj paths
+# in the caller repo; uses scripts/source-release/stage.sh from build-common
+# (consumed via the caller's submodule pin) to enumerate source files via
+# MSBuild and stage them, then scans, zips, verifies the zip builds, and
+# optionally uploads it to S3.
+#
+# Callers must check out build-common (typically as a submodule at the
+# repository root) at a SHA that includes scripts/source-release/stage.sh.
+
+on:
+    workflow_call:
+        inputs:
+            project_name:
+                description: >-
+                    Customer-facing project name. Used as the staged
+                    directory name prefix (e.g. "Avalonia.Controls.TreeDataGrid"
+                    yields "Avalonia.Controls.TreeDataGrid-1.2.3"), the zip
+                    filename, and the default S3 key prefix.
+                required: true
+                type: string
+            allow_list:
+                description: >-
+                    Path (relative to the caller's repo root) to the text file
+                    listing customer-facing csproj paths to include. One path
+                    per line; blank lines and `#` comments allowed.
+                required: false
+                type: string
+                default: .github/source-release/projects.txt
+            solution_file:
+                description: >-
+                    Filename of the .slnx at the caller's repo root to mirror
+                    into the customer zip. The staged solution reuses this
+                    filename and references only the allow-listed projects.
+                    When unset, the stager picks the first .slnx at the repo
+                    root (filesystem order) — fine for repos with a single
+                    .slnx, but ambiguous otherwise. Set explicitly when the
+                    repo has multiple .slnx files (e.g. a `*.ci.slnx`).
+                required: false
+                type: string
+                default: ""
+            version:
+                description: >-
+                    Explicit version override (no leading `v`). When set,
+                    takes precedence over `github.event.release.tag_name`.
+                    Intended for `workflow_dispatch` test runs where there is
+                    no release event to read a tag from, and for repackaging
+                    historic releases.
+                required: false
+                type: string
+                default: ""
+            ref:
+                description: >-
+                    Git commitish (branch, tag, or SHA) to check out before
+                    staging. When empty, uses the ref that triggered the
+                    workflow. Intended for repackaging historic releases via
+                    `workflow_dispatch`.
+                required: false
+                type: string
+                default: ""
+            s3_prefix:
+                description: >-
+                    S3 key prefix for the uploaded zip. Defaults to
+                    `project_name`. The full key is `<prefix>/<zip_name>`.
+                required: false
+                type: string
+                default: ""
+            upload_to_s3:
+                description: >-
+                    Whether to upload the zip to S3. Defaults to false so
+                    callers must opt in explicitly — release-triggered
+                    callers typically pass
+                    `github.event_name == 'release'`.
+                required: false
+                type: boolean
+                default: false
+            dotnet_sdk:
+                description: .NET SDK version. Must be 9.0+ for `dotnet msbuild -getItem/-getProperty`.
+                required: false
+                type: string
+                default: 9.0.x
+        secrets:
+            checkout_token:
+                description: PAT with access to private submodules.
+                required: true
+            license_key:
+                description: >-
+                    Avalonia license key used by the verify-build job. The
+                    zip must build with a real license, so this is required.
+                required: true
+            aws_access_key_id:
+                required: false
+            aws_secret_access_key:
+                required: false
+            aws_region:
+                description: S3 region (e.g. `fr-par` for Scaleway, `us-east-1` for AWS).
+                required: false
+            s3_bucket_endpoint:
+                description: >-
+                    Virtual-hosted-style bucket URL, e.g.
+                    `https://my-bucket.s3.fr-par.scw.cloud` for Scaleway or
+                    `https://my-bucket.s3.us-east-1.amazonaws.com` for AWS.
+                    The workflow parses the bucket name and service endpoint
+                    out of this URL.
+                required: false
+
+jobs:
+
+    package:
+        name: Scan & package source zip
+        runs-on: ubuntu-latest
+        outputs:
+            version: ${{ steps.version.outputs.version }}
+            zip_name: ${{ steps.version.outputs.zip_name }}
+            dir_name: ${{ steps.version.outputs.dir_name }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  submodules: recursive
+                  token: ${{ secrets.checkout_token }}
+                  ref: ${{ inputs.ref }}
+
+            - name: Setup .NET
+              uses: actions/setup-dotnet@v4
+              with:
+                  dotnet-version: ${{ inputs.dotnet_sdk }}
+
+            - name: Resolve version
+              id: version
+              shell: bash
+              env:
+                  PROJECT_NAME: ${{ inputs.project_name }}
+                  EXPLICIT_VERSION: ${{ inputs.version }}
+                  RAW_TAG: ${{ github.event.release.tag_name }}
+              run: |
+                  set -euo pipefail
+                  if [[ -n "$EXPLICIT_VERSION" ]]; then
+                      source="input version='${EXPLICIT_VERSION}'"
+                      version="${EXPLICIT_VERSION#v}"
+                  elif [[ -n "$RAW_TAG" ]]; then
+                      source="release tag '${RAW_TAG}'"
+                      version="${RAW_TAG#v}"
+                  else
+                      echo "::error::No version available — neither inputs.version nor github.event.release.tag_name is set." >&2
+                      exit 1
+                  fi
+                  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+                      echo "::error::${source} does not match expected version format (MAJOR.MINOR.PATCH[-suffix])."
+                      exit 1
+                  fi
+                  dir_name="${PROJECT_NAME}-${version}"
+                  zip_name="${dir_name}.zip"
+                  echo "version=${version}" >> "$GITHUB_OUTPUT"
+                  echo "dir_name=${dir_name}" >> "$GITHUB_OUTPUT"
+                  echo "zip_name=${zip_name}" >> "$GITHUB_OUTPUT"
+                  echo "Resolved version: ${version} (from ${source})"
+
+            - name: Verify staging script is present
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  script="$GITHUB_WORKSPACE/build-common/scripts/source-release/stage.sh"
+                  if [[ ! -f "$script" ]]; then
+                      echo "::error::Expected staging script not found at build-common/scripts/source-release/stage.sh. Bump your build-common submodule pin to a commit that includes it." >&2
+                      exit 1
+                  fi
+
+            - name: Stage source via MSBuild
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  staging_root="${RUNNER_TEMP}/staging"
+                  staging_dir="${staging_root}/${{ steps.version.outputs.dir_name }}"
+                  bash "$GITHUB_WORKSPACE/build-common/scripts/source-release/stage.sh" \
+                      "$GITHUB_WORKSPACE" \
+                      "${{ inputs.allow_list }}" \
+                      "$staging_dir" \
+                      "${{ inputs.solution_file }}"
+                  echo "staging_dir=${staging_dir}" >> "$GITHUB_ENV"
+                  echo "staging_root=${staging_root}" >> "$GITHUB_ENV"
+
+            - name: Scan staged source for secrets
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  echo "Scanning $staging_dir for secrets..."
+
+                  fail=0
+
+                  # Online Avalonia license keys: avln_on_key:v1:<32 hex>
+                  matches=$(grep -RInE --binary-files=without-match \
+                      'avln_on_key:v1:[A-Fa-f0-9]{32}' "$staging_dir" || true)
+                  if [[ -n "$matches" ]]; then
+                      echo "::error::Online Avalonia license key(s) found:"
+                      echo "$matches"
+                      fail=1
+                  fi
+
+                  # Offline Avalonia license keys: avln_off_key:v1:<base64>:<base64>
+                  matches=$(grep -RInE --binary-files=without-match \
+                      'avln_off_key:v1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+' "$staging_dir" || true)
+                  if [[ -n "$matches" ]]; then
+                      echo "::error::Offline Avalonia license key(s) found:"
+                      echo "$matches"
+                      fail=1
+                  fi
+
+                  # nuget.config files should never be in the staged tree — they
+                  # aren't in any csproj item list and aren't imported as MSBuild
+                  # files, so the MSBuild-driven stage won't include them. Presence
+                  # here would mean the stage script regressed.
+                  nuget_files=$(find "$staging_dir" -type f -iname 'nuget.config' || true)
+                  if [[ -n "$nuget_files" ]]; then
+                      echo "::error::nuget.config file(s) leaked into staging directory:"
+                      echo "$nuget_files"
+                      fail=1
+                  fi
+
+                  # Belt-and-braces: any package-source-credential markers anywhere.
+                  matches=$(grep -RInE --binary-files=without-match \
+                      -e '<packageSourceCredentials' \
+                      -e 'ClearTextPassword' \
+                      -e '<Password\b' \
+                      "$staging_dir" || true)
+                  if [[ -n "$matches" ]]; then
+                      echo "::error::Possible NuGet credential markers found:"
+                      echo "$matches"
+                      fail=1
+                  fi
+
+                  if [[ "$fail" -ne 0 ]]; then
+                      exit 1
+                  fi
+                  echo "No secrets found."
+
+            - name: Create zip
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  cd "$staging_root"
+                  zip -r "${RUNNER_TEMP}/${{ steps.version.outputs.zip_name }}" \
+                      "${{ steps.version.outputs.dir_name }}"
+                  ls -la "${RUNNER_TEMP}/${{ steps.version.outputs.zip_name }}"
+
+            - name: Upload zip artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: source-zip
+                  path: ${{ runner.temp }}/${{ steps.version.outputs.zip_name }}
+                  if-no-files-found: error
+
+    verify-build:
+        name: Verify zip is buildable
+        needs: package
+        runs-on: ubuntu-latest
+        steps:
+            - name: Setup .NET
+              uses: actions/setup-dotnet@v4
+              with:
+                  dotnet-version: ${{ inputs.dotnet_sdk }}
+
+            - name: Download source zip
+              uses: actions/download-artifact@v4
+              with:
+                  name: source-zip
+                  path: ${{ runner.temp }}/zip
+
+            - name: Extract zip
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  mkdir -p "${RUNNER_TEMP}/extracted"
+                  unzip -q "${RUNNER_TEMP}/zip/${{ needs.package.outputs.zip_name }}" \
+                      -d "${RUNNER_TEMP}/extracted"
+                  ls -la "${RUNNER_TEMP}/extracted/${{ needs.package.outputs.dir_name }}"
+
+            - name: Build extracted source
+              env:
+                  AVALONIA_LICENSE_KEY: ${{ secrets.license_key }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  cd "${RUNNER_TEMP}/extracted/${{ needs.package.outputs.dir_name }}"
+                  slnx=$(find . -maxdepth 1 -name '*.slnx' -print -quit)
+                  if [[ -z "$slnx" ]]; then
+                      echo "::error::No .slnx found at the root of the extracted zip." >&2
+                      exit 1
+                  fi
+                  dotnet build "$slnx" -c Release
+
+    upload:
+        name: Upload zip to S3
+        needs: [package, verify-build]
+        if: ${{ inputs.upload_to_s3 }}
+        runs-on: ubuntu-latest
+        steps:
+            - name: Validate upload secrets and parse bucket endpoint
+              id: s3
+              shell: bash
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ secrets.aws_access_key_id }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.aws_secret_access_key }}
+                  AWS_REGION: ${{ secrets.aws_region }}
+                  S3_BUCKET_ENDPOINT: ${{ secrets.s3_bucket_endpoint }}
+              run: |
+                  set -euo pipefail
+                  missing=()
+                  [[ -z "$AWS_ACCESS_KEY_ID"     ]] && missing+=(aws_access_key_id)
+                  [[ -z "$AWS_SECRET_ACCESS_KEY" ]] && missing+=(aws_secret_access_key)
+                  [[ -z "$AWS_REGION"            ]] && missing+=(aws_region)
+                  [[ -z "$S3_BUCKET_ENDPOINT"    ]] && missing+=(s3_bucket_endpoint)
+                  if (( ${#missing[@]} > 0 )); then
+                      echo "::error::upload_to_s3 is true but required secret(s) missing: ${missing[*]}" >&2
+                      exit 1
+                  fi
+
+                  # Parse virtual-hosted-style URL into bucket + service endpoint.
+                  # Split on `.s3.` (rather than the first dot) so bucket names
+                  # containing dots — e.g. https://my.bucket.s3.us-east-1.amazonaws.com
+                  # — are parsed as bucket=`my.bucket`, not bucket=`my`.
+                  if [[ "$S3_BUCKET_ENDPOINT" =~ ^(https?://)(.+)\.s3\.(.+)$ ]]; then
+                      scheme_prefix="${BASH_REMATCH[1]}"
+                      bucket="${BASH_REMATCH[2]}"
+                      host_after_s3="${BASH_REMATCH[3]}"
+                      endpoint="${scheme_prefix}s3.${host_after_s3}"
+                  else
+                      echo "::error::s3_bucket_endpoint must be a virtual-hosted-style URL like https://bucket.s3.region.example.com (got: ${S3_BUCKET_ENDPOINT})." >&2
+                      exit 1
+                  fi
+                  echo "bucket=${bucket}" >> "$GITHUB_OUTPUT"
+                  echo "endpoint=${endpoint}" >> "$GITHUB_OUTPUT"
+                  echo "Parsed bucket=${bucket}, endpoint=${endpoint}"
+
+            - name: Download source zip
+              uses: actions/download-artifact@v4
+              with:
+                  name: source-zip
+                  path: ${{ runner.temp }}/zip
+
+            - name: Upload to S3
+              shell: bash
+              env:
+                  # Set creds directly rather than via aws-actions/configure-aws-credentials,
+                  # whose STS GetCallerIdentity call doesn't resolve against non-AWS S3
+                  # endpoints (e.g. Scaleway).
+                  AWS_ACCESS_KEY_ID: ${{ secrets.aws_access_key_id }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.aws_secret_access_key }}
+                  AWS_DEFAULT_REGION: ${{ secrets.aws_region }}
+                  S3_BUCKET: ${{ steps.s3.outputs.bucket }}
+                  S3_ENDPOINT: ${{ steps.s3.outputs.endpoint }}
+                  S3_PREFIX: ${{ inputs.s3_prefix != '' && inputs.s3_prefix || inputs.project_name }}
+                  ZIP_NAME: ${{ needs.package.outputs.zip_name }}
+                  VERSION: ${{ needs.package.outputs.version }}
+              run: |
+                  set -euo pipefail
+                  zip_path="${RUNNER_TEMP}/zip/${ZIP_NAME}"
+                  s3_key="${S3_PREFIX}/${ZIP_NAME}"
+                  s3_uri="s3://${S3_BUCKET}/${s3_key}"
+
+                  aws s3 cp "$zip_path" "$s3_uri" \
+                      --endpoint-url "$S3_ENDPOINT" \
+                      --no-progress \
+                      --content-type application/zip
+
+                  {
+                      echo "### Source zip uploaded"
+                      echo ""
+                      echo "- **Version:** \`${VERSION}\`"
+                      echo "- **S3 URI:** \`${s3_uri}\`"
+                      echo "- **Endpoint:** \`${S3_ENDPOINT}\`"
+                  } >> "$GITHUB_STEP_SUMMARY"
