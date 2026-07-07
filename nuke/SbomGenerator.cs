@@ -38,7 +38,16 @@ public static class SbomGenerator
     {
         outputDirectory.CreateOrCleanDirectory();
 
-        foreach (var nupkg in packagesDirectory.GlobFiles("*.nupkg"))
+        var nupkgs = packagesDirectory.GlobFiles("*.nupkg");
+        if (nupkgs.Count == 0)
+        {
+            // Silently producing zero SBOMs would look like success while shipping packages
+            // without CRA evidence; a build that generates SBOMs must have packages to scan.
+            throw new InvalidOperationException(
+                $"SBOM: no .nupkg files found in {packagesDirectory} - was the SBOM target run before packing?");
+        }
+
+        foreach (var nupkg in nupkgs)
         {
             var packageId = ReadPackageId((string)nupkg);
             GenerateForPackage(cycloneDx, rootDirectory, nupkg, outputDirectory, version, packageId,
