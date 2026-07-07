@@ -139,6 +139,16 @@ jobs:
           path: ${{github.workspace}}/artifacts/packages/${{ inputs.artifact_glob }}
           retention-days: ${{ inputs.artifact_retention_days }}
 
+    # Standalone copy of the per-package SBOMs that CreateSbom also embeds into each .nupkg.
+    # Repositories whose nuke build doesn't generate SBOMs yet simply skip this step.
+    - name: Upload SBOM Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+          name: sbom
+          path: ${{github.workspace}}/artifacts/sbom/*.cdx.json
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact_retention_days }}
+
   push-package:
     name: >-
       push ${{ inputs.nuget_feed }}
