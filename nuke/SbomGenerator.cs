@@ -29,12 +29,16 @@ namespace NukeExtensions;
 // of constituent projects, so the merged-away projects' dependencies still appear in the SBOM.
 public static class SbomGenerator
 {
+    // The version parameter is optional: builds whose nuke script computes the package version
+    // (and passes the same value to pack) supply it; builds where MSBuild computes the version
+    // (e.g. from a shared props file plus a CI suffix) omit it, and each package's version is
+    // read back from its own .nuspec - which by definition matches what was shipped.
     public static void Generate(
         Tool cycloneDx,
         AbsolutePath rootDirectory,
         AbsolutePath packagesDirectory,
         AbsolutePath outputDirectory,
-        string version)
+        string? version = null)
     {
         outputDirectory.CreateOrCleanDirectory();
 
@@ -49,9 +53,9 @@ public static class SbomGenerator
 
         foreach (var nupkg in nupkgs)
         {
-            var packageId = ReadPackageId((string)nupkg);
-            GenerateForPackage(cycloneDx, rootDirectory, nupkg, outputDirectory, version, packageId,
-                new[] { packageId });
+            var meta = ReadNuspecMetadata((string)nupkg);
+            GenerateForPackage(cycloneDx, rootDirectory, nupkg, outputDirectory, version ?? meta.Version, meta.Id,
+                new[] { meta.Id });
         }
     }
 
