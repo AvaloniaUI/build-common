@@ -482,12 +482,16 @@ public static class SbomGenerator
 
         // These are shipped libraries, not applications (cyclonedx-dotnet's default type).
         component["type"] = "library";
-        // The .nuspec is authoritative for the shipped version; a build-supplied version that
-        // disagrees means the SBOM is being generated against stale packages, and silently
-        // keeping it would leave the root component's version and purl inconsistent.
+        // The .nuspec is authoritative for the shipped version. A build-supplied version that
+        // disagrees means the packages predate the current restore, so the dependency data just
+        // scanned may not describe what's actually inside them - fail rather than record it as
+        // CRA evidence. Can't trigger in normal flows: builds pass the same version to pack and
+        // to the SBOM scan within one run, and the version-less Generate overload reads the
+        // version from the nuspec itself.
         var scannedVersion = component["version"]?.GetValue<string>();
         if (scannedVersion is not null && scannedVersion != meta.Version)
-            Warning($"SBOM: '{meta.Id}' was scanned as version '{scannedVersion}' but the shipped package is '{meta.Version}' - are the packages stale? Recording '{meta.Version}'.");
+            throw new InvalidOperationException(
+                $"SBOM: '{meta.Id}' was scanned as version '{scannedVersion}' but the shipped package is '{meta.Version}' - are the packages stale?");
         component["version"] = meta.Version;
         component["purl"] = $"pkg:nuget/{meta.Id}@{meta.Version}";
         if (meta.Description is not null)
