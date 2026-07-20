@@ -114,8 +114,10 @@ on:
                 default: ""
         secrets:
             checkout_token:
-                description: PAT with access to private submodules.
-                required: true
+                description: >-
+                    PAT with access to private submodules. Falls back to
+                    `github.token` when not supplied.
+                required: false
             license_key:
                 description: >-
                     Avalonia license key used by the verify-build job. The
@@ -141,7 +143,7 @@ jobs:
               uses: actions/checkout@v4
               with:
                   submodules: recursive
-                  token: ${{ secrets.checkout_token }}
+                  token: ${{ secrets.checkout_token != '' && secrets.checkout_token || github.token }}
                   ref: ${{ inputs.ref }}
 
             - name: Setup .NET
@@ -217,7 +219,7 @@ jobs:
                   fail=0
 
                   # Online Avalonia license keys: avln_on_key:v1:<32 hex>
-                  matches=$(grep -RInE --binary-files=without-match \
+                  matches=$(grep -IRnE \
                       'avln_on_key:v1:[A-Fa-f0-9]{32}' "$staging_dir" || true)
                   if [[ -n "$matches" ]]; then
                       echo "::error::Online Avalonia license key(s) found:"
@@ -226,7 +228,7 @@ jobs:
                   fi
 
                   # Offline Avalonia license keys: avln_off_key:v1:<base64>:<base64>
-                  matches=$(grep -RInE --binary-files=without-match \
+                  matches=$(grep -IRnE \
                       'avln_off_key:v1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+' "$staging_dir" || true)
                   if [[ -n "$matches" ]]; then
                       echo "::error::Offline Avalonia license key(s) found:"
@@ -246,10 +248,10 @@ jobs:
                   fi
 
                   # Belt-and-braces: any package-source-credential markers anywhere.
-                  matches=$(grep -RInE --binary-files=without-match \
+                  matches=$(grep -IRnE \
                       -e '<packageSourceCredentials' \
                       -e 'ClearTextPassword' \
-                      -e '<Password\b' \
+                      -e '<Password[[:space:]/>]' \
                       "$staging_dir" || true)
                   if [[ -n "$matches" ]]; then
                       echo "::error::Possible NuGet credential markers found:"

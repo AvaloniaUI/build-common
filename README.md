@@ -93,7 +93,7 @@ jobs:
             # allow_list: .github/source-release/projects.txt    # default
             # solution_file: Avalonia.Controls.Example.slnx       # required only if multiple .slnx exist at the repo root
         secrets:
-            checkout_token: ${{ secrets.SUBMODULE_TOKEN }}
+            checkout_token: ${{ secrets.SUBMODULE_TOKEN }}     # optional, only for private submodules
             license_key: ${{ secrets.ACCELERATE_LICENSE_KEY }}
             release_manager_api_key: ${{ secrets.RELEASE_MANAGER_API_KEY }}
 ```
@@ -140,7 +140,7 @@ runners. The Release Manager upload job always runs on `ubuntu-latest`.
             release_manager_base_url: ${{ vars.RELEASE_MANAGER_BASE_URL }}
             release_manager_product: ${{ vars.RELEASE_MANAGER_PRODUCT_NAME }}
         secrets:
-            checkout_token: ${{ secrets.SUBMODULE_TOKEN }}
+            checkout_token: ${{ secrets.SUBMODULE_TOKEN }}     # optional, only for private submodules
             license_key: ${{ secrets.ACCELERATE_LICENSE_KEY }}
             release_manager_api_key: ${{ secrets.RELEASE_MANAGER_API_KEY }}
 ```
