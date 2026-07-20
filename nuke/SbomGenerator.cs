@@ -59,17 +59,37 @@ public static class SbomGenerator
         }
     }
 
+    // projectSearchDirs: root-relative directories searched (recursively) for the constituent
+    // projects' .csproj files; defaults to the src/packages layout the component repositories
+    // use. Repositories with different layouts (e.g. Xpf's fork/ and tools/ trees) pass their own.
+    //
+    // additionalProductNames: binary names (assembly simple name or filename without extension)
+    // that are first-party even though they match neither a constituent project id nor the
+    // Avalonia.*/AvaloniaUI.* prefixes - e.g. a native library whose name differs from any
+    // project (wpfgfx_xpf) - so the package-content scan records them as manufacturer-supplied
+    // instead of flagging them as unaccounted third-party binaries.
+    //
+    // baseIntermediateOutputPath: forwarded to cyclonedx-dotnet as -biop for repositories whose
+    // projects restore into <base>/obj/<ProjectName>/project.assets.json (the Arcade layout)
+    // instead of <projectDir>/obj. Projects not found there fall back to cyclonedx-dotnet's
+    // msbuild evaluation of ProjectAssetsFile, so a mixed-layout repository still resolves every
+    // constituent correctly.
     public static void GenerateForPackage(Tool cycloneDx, AbsolutePath rootDirectory, AbsolutePath? packagePath,
-        AbsolutePath outputDirectory, string version, string packageId, IReadOnlyList<string> constituentProjectIds)
+        AbsolutePath outputDirectory, string version, string packageId, IReadOnlyList<string> constituentProjectIds,
+        IReadOnlyList<string>? projectSearchDirs = null,
+        IReadOnlyList<string>? additionalProductNames = null,
+        AbsolutePath? baseIntermediateOutputPath = null)
     {
         JsonObject? merged = null;
         var seenComponentKeys = new HashSet<string>();
         var scannedProjectDirs = new List<AbsolutePath>();
 
+        var searchDirs = projectSearchDirs ?? new[] { "src", "packages" };
+
         foreach (var projectId in constituentProjectIds)
         {
-            var project = rootDirectory.GlobFiles($"src/**/{projectId}.csproj")
-                .Concat(rootDirectory.GlobFiles($"packages/**/{projectId}.csproj"))
+            var project = searchDirs
+                .SelectMany(dir => rootDirectory.GlobFiles($"{dir}/**/{projectId}.csproj"))
                 .FirstOrDefault();
             if (project is null)
             {
@@ -79,9 +99,17 @@ public static class SbomGenerator
             scannedProjectDirs.Add(project.Parent);
 
             var tempBom = outputDirectory / $"_{projectId}.tmp.json";
-            cycloneDx(
-                $"\"{project}\" -o \"{outputDirectory}\" -fn \"{tempBom.Name}\" -F Json -dpr -ed -sn \"{packageId}\" -sv \"{version}\"",
-                workingDirectory: rootDirectory);
+            // Two literal argument strings rather than a spliced-in fragment: Tool's argument
+            // handler re-quotes interpolated values, so a pre-built " -biop ..." string would be
+            // passed through as a single mangled argument.
+            if (baseIntermediateOutputPath is null)
+                cycloneDx(
+                    $"\"{project}\" -o \"{outputDirectory}\" -fn \"{tempBom.Name}\" -F Json -dpr -ed -sn \"{packageId}\" -sv \"{version}\"",
+                    workingDirectory: rootDirectory);
+            else
+                cycloneDx(
+                    $"\"{project}\" -o \"{outputDirectory}\" -fn \"{tempBom.Name}\" -F Json -dpr -ed -sn \"{packageId}\" -sv \"{version}\" -biop \"{baseIntermediateOutputPath}\"",
+                    workingDirectory: rootDirectory);
 
             var doc = JsonNode.Parse(File.ReadAllText(tempBom))!.AsObject();
             File.Delete(tempBom);
@@ -131,8 +159,11 @@ public static class SbomGenerator
             var nuspec = ReadNuspecMetadata((string)packagePath);
             EnrichRootComponent(merged, nuspec);
             AddNuspecDependencyComponents(merged, seenComponentKeys, nuspec, rootRef);
+            var productNames = additionalProductNames is null
+                ? constituentProjectIds
+                : constituentProjectIds.Concat(additionalProductNames).ToList();
             AddPackageContentComponents(merged, seenComponentKeys, (string)packagePath, packageId,
-                constituentProjectIds, nuspec);
+                productNames, nuspec);
         }
         else
         {
@@ -581,9 +612,9 @@ public static class SbomGenerator
     // not imply a dependency. They stay flat top-level components (not nested subcomponents) so their
     // per-assembly hashes remain visible to scanners that ignore nested components.
     static void AddPackageContentComponents(JsonObject merged, HashSet<string> seenComponentKeys,
-        string nupkgPath, string packageId, IReadOnlyList<string> constituentProjectIds, NuspecMetadata meta)
+        string nupkgPath, string packageId, IReadOnlyList<string> firstPartyNames, NuspecMetadata meta)
     {
-        var productNames = new HashSet<string>(constituentProjectIds, StringComparer.OrdinalIgnoreCase) { packageId };
+        var productNames = new HashSet<string>(firstPartyNames, StringComparer.OrdinalIgnoreCase) { packageId };
         var representedNames = (merged["components"]?.AsArray() ?? new JsonArray())
             .Select(c => c?["name"]?.GetValue<string>())
             .Where(n => n is not null)
@@ -781,4 +812,8 @@ public static class SbomGenerator
     }
 
     public static string ReadPackageId(string nupkgPath) => ReadNuspecMetadata(nupkgPath).Id;
+
+    // For repositories that call GenerateForPackage directly but whose package versions are
+    // computed by MSBuild: the shipped .nuspec is authoritative for what was actually packed.
+    public static string ReadPackageVersion(string nupkgPath) => ReadNuspecMetadata(nupkgPath).Version;
 }
