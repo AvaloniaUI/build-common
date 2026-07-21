@@ -79,8 +79,13 @@ public static class SbomGenerator
             scannedProjectDirs.Add(project.Parent);
 
             var tempBom = outputDirectory / $"_{projectId}.tmp.json";
+            // No quotes around the interpolated values: Tool takes an ArgumentStringHandler,
+            // which already quotes whatever is interpolated into it. Quoting here as well
+            // produced ""C:\Some Dir\proj.csproj"", which the OS reads as an empty quoted
+            // string followed by a bare path, so the argument split at the first space and
+            // the tool rejected the remainder. Only bit where a path contained a space.
             cycloneDx(
-                $"\"{project}\" -o \"{outputDirectory}\" -fn \"{tempBom.Name}\" -F Json -dpr -ed -sn \"{packageId}\" -sv \"{version}\"",
+                $"{project} -o {outputDirectory} -fn {tempBom.Name} -F Json -dpr -ed -sn {packageId} -sv {version}",
                 workingDirectory: rootDirectory);
 
             var doc = JsonNode.Parse(File.ReadAllText(tempBom))!.AsObject();
