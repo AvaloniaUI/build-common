@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -636,17 +637,10 @@ public static class SbomGenerator
 
         using var file = File.Open(nupkgPath, FileMode.Open, FileAccess.Read);
         using var zip = new ZipArchive(file, ZipArchiveMode.Read);
-        foreach (var entry in zip.Entries)
+        foreach (var (path, bytes) in EnumerateShippedBinaries(zip))
         {
-            var path = entry.FullName;
-            // Reference assemblies under ref/ are compile-time surface, not shipped runtime code;
-            // the real implementation lives under lib/ and is scanned there.
-            if (!IsShippedBinary(path) || path.StartsWith("ref/", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var bytes = ReadEntry(entry);
             var assemblyName = TryReadAssemblyName(bytes, out var assemblyVersion);
-            var simpleName = assemblyName ?? Path.GetFileNameWithoutExtension(path);
+            var simpleName = assemblyName ?? BinaryName(path);
 
             // Third-party binaries already represented by a NuGet/npm component need no duplicate.
             if (assemblyName is not null && representedNames.Contains(simpleName))
@@ -720,11 +714,92 @@ public static class SbomGenerator
         }
     }
 
-    static bool IsShippedBinary(string path)
+    // Walks the package for shipped binaries, yielding each as (path inside the package, bytes).
+    //
+    // Descends into nested .zip entries: a NativeAOT tool package ships its macOS build as a
+    // zipped .app bundle (re-zipping it in the .nupkg is what preserves the bundle structure and
+    // the executable permission bits), so on that platform every shipped binary lives one level
+    // down. Without this the macOS package would record no shipped binaries at all while the
+    // Windows and Linux packages record theirs.
+    static IEnumerable<(string Path, byte[] Bytes)> EnumerateShippedBinaries(
+        ZipArchive archive, string pathPrefix = "")
     {
-        var ext = Path.GetExtension(path).ToLowerInvariant();
-        return ext is ".dll" or ".so" or ".dylib" or ".wasm" or ".node" or ".a";
+        foreach (var entry in archive.Entries)
+        {
+            // Directory entries have an empty Name and no content of their own.
+            if (entry.Name.Length == 0)
+                continue;
+
+            var path = pathPrefix + entry.FullName;
+
+            // Reference assemblies under ref/ are compile-time surface, not shipped runtime code;
+            // the real implementation lives under lib/ and is scanned there. Only meaningful at the
+            // package root - a ref/ directory inside a bundled app is that app's own layout.
+            if (pathPrefix.Length == 0 && entry.FullName.StartsWith("ref/", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (Path.GetExtension(entry.FullName).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                // Buffered into memory because ZipArchive needs a seekable stream, which the
+                // deflate stream of an entry is not.
+                using var nestedBytes = new MemoryStream(ReadEntry(entry));
+                using var nested = new ZipArchive(nestedBytes, ZipArchiveMode.Read);
+                foreach (var inner in EnumerateShippedBinaries(nested, path + "/"))
+                    yield return inner;
+                continue;
+            }
+
+            if (!IsShippedBinary(entry.FullName) && !HasNativeExecutableHeader(entry))
+                continue;
+
+            yield return (path, ReadEntry(entry));
+        }
     }
+
+    static bool IsShippedBinary(string path) => IsBinaryExtension(Path.GetExtension(path));
+
+    static bool IsBinaryExtension(string extension) =>
+        extension.ToLowerInvariant() is ".dll" or ".so" or ".dylib" or ".wasm" or ".node" or ".a" or ".exe";
+
+    // The shipped name of a binary. Path.GetFileNameWithoutExtension can't be used unconditionally:
+    // a NativeAOT executable is extensionless outside Windows, so for AvaloniaUI.DeveloperTools it
+    // would strip ".DeveloperTools" as though it were an extension and record the component as
+    // "AvaloniaUI". Only recognised binary extensions are stripped.
+    static string BinaryName(string path)
+    {
+        var name = Path.GetFileName(path);
+        var extension = Path.GetExtension(name);
+        return IsBinaryExtension(extension) ? name[..^extension.Length] : name;
+    }
+
+    // A NativeAOT application ships as a native executable - app.exe on Windows, extensionless on
+    // Linux and inside a macOS .app bundle - which is the package's primary deliverable and the one
+    // binary that must not be missing from its SBOM. An extension list can't spot the extensionless
+    // form, so classify by the executable-format magic instead. Only the first bytes of the entry
+    // are inflated, so this stays cheap for the non-binary entries it rejects.
+    static bool HasNativeExecutableHeader(ZipArchiveEntry entry)
+    {
+        Span<byte> header = stackalloc byte[4];
+        using var stream = entry.Open();
+        return stream.ReadAtLeast(header, header.Length, throwOnEndOfStream: false) == header.Length
+               && IsNativeExecutableHeader(header);
+    }
+
+    static bool IsNativeExecutableHeader(ReadOnlySpan<byte> header) =>
+        // PE - Windows executables and DLLs.
+        (header[0] == (byte)'M' && header[1] == (byte)'Z')
+        // ELF - Linux executables and shared objects.
+        || (header[0] == 0x7F && header[1] == (byte)'E' && header[2] == (byte)'L' && header[3] == (byte)'F')
+        // Mach-O, 32- and 64-bit. Both byte orders, since the magic is stored in the host order.
+        || MatchesMagic(header, 0xFEEDFACE) || MatchesMagic(header, 0xFEEDFACF)
+        // Mach-O universal ("fat") wrapper, which a macOS build targeting both architectures
+        // produces. Shared with the Java class-file magic, but a .class in one of these packages
+        // would at worst be recorded as an extra component with a verifiable hash.
+        || MatchesMagic(header, 0xCAFEBABE);
+
+    static bool MatchesMagic(ReadOnlySpan<byte> header, uint magic) =>
+        BinaryPrimitives.ReadUInt32BigEndian(header) == magic
+        || BinaryPrimitives.ReadUInt32LittleEndian(header) == magic;
 
     static byte[] ReadEntry(ZipArchiveEntry entry)
     {
