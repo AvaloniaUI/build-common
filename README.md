@@ -17,17 +17,21 @@ Common build targets and scripts necessary for libraries and components
 5. Some branding images, like default nuget package icon
 6. Reusable GitHub Actions workflows under `.github/workflows/`:
     - `library-cicd.yml` — build, test, pack, push, and optionally GitHub-release a library.
-    - `source-release.yml` — package a customer-facing source zip when a library is released. See `scripts/source-release/stage.sh`.
+    - `source-release.yml` — package a customer-facing source zip when a library is released. See the `scripts/source-release` NUKE build.
 
 ## Source-release workflow
 
 Drop the following into `.github/workflows/source-release.yml` in any consumer
-repository to wire up source-zip packaging on release publish:
+repository to wire up source-zip packaging on a `release/*` branch push. A small
+`setup` job derives the version from the branch name and passes it to the reusable
+workflow, so the source zip ships in the same release as everything else:
 
 ```yaml
 name: Source Release
 
 on:
+    push:
+        branches: [ "release/*" ]
     release:
         types: [published]
     workflow_dispatch:
@@ -40,18 +44,39 @@ on:
                 description: 'Version for the zip (no leading v).'
                 required: true
                 default: 0.0.0-test1
-            upload_to_s3:
-                description: 'Upload the zip to S3.'
+            upload:
+                description: 'Upload the zip to Release Manager.'
                 required: false
                 type: boolean
                 default: false
 
 concurrency:
-    group: source-release-${{ github.event.release.tag_name || inputs.version }}
+    group: source-release-${{ github.event.release.tag_name || inputs.version || github.ref }}
     cancel-in-progress: false
 
 jobs:
+    # Derive the version (and whether to upload) from whichever trigger fired. A
+    # release/* branch push and a published release always upload.
+    setup:
+        runs-on: ubuntu-latest
+        outputs:
+            version: ${{ steps.v.outputs.version }}
+            upload: ${{ steps.v.outputs.upload }}
+        steps:
+            - id: v
+              run: |
+                  set -euo pipefail
+                  case "${{ github.event_name }}" in
+                      push)    ver="${GITHUB_REF#refs/heads/release/}"; upload=true ;;
+                      release) ver="${{ github.event.release.tag_name }}"; upload=true ;;
+                      *)       ver="${{ inputs.version }}"; upload="${{ inputs.upload }}" ;;
+                  esac
+                  ver="${ver#v}"
+                  echo "version=$ver" >> "$GITHUB_OUTPUT"
+                  echo "upload=$upload" >> "$GITHUB_OUTPUT"
+
     source-release:
+        needs: setup
         # Pin to a specific commit SHA (not a branch or tag) — any move of
         # @main would otherwise immediately affect every consumer. Look up
         # the latest source-release SHA from this repo's commit history and
@@ -60,34 +85,63 @@ jobs:
         uses: AvaloniaUI/build-common/.github/workflows/source-release.yml@<sha>
         with:
             project_name: Avalonia.Controls.Example
-            ref: ${{ inputs.ref }}                               # empty on release events
-            version: ${{ inputs.version }}                       # empty on release events
-            upload_to_s3: ${{ github.event_name == 'release' || inputs.upload_to_s3 }}
+            ref: ${{ inputs.ref }}                               # empty outside workflow_dispatch
+            version: ${{ needs.setup.outputs.version }}
+            upload: ${{ needs.setup.outputs.upload == 'true' }}
+            release_manager_base_url: ${{ vars.RELEASE_MANAGER_BASE_URL }}
+            release_manager_product: ${{ vars.RELEASE_MANAGER_PRODUCT_NAME }}
             # allow_list: .github/source-release/projects.txt    # default
             # solution_file: Avalonia.Controls.Example.slnx       # required only if multiple .slnx exist at the repo root
         secrets:
-            checkout_token: ${{ secrets.SUBMODULE_TOKEN }}
+            checkout_token: ${{ secrets.SUBMODULE_TOKEN }}     # optional, only for private submodules
             license_key: ${{ secrets.ACCELERATE_LICENSE_KEY }}
-            aws_access_key_id: ${{ secrets.COMP_SOURCE_WRITE_SCW_ACCESS_KEY }}
-            aws_secret_access_key: ${{ secrets.COMP_SOURCE_WRITE_SCW_SECRET_KEY }}
-            aws_region: fr-par
-            s3_bucket_endpoint: ${{ vars.COMP_SOURCE_BUCKET_ENDPOINT }}
+            release_manager_api_key: ${{ secrets.RELEASE_MANAGER_API_KEY }}
 ```
 
-The `workflow_dispatch` trigger lets you exercise the full pipeline (stage → scan → zip → verify-build) on demand without publishing a release, and can also repackage historic releases by setting `ref` to the relevant tag or commit SHA together with the matching `version`. The `upload_to_s3` checkbox controls whether the resulting zip is shipped to S3 — leave it off for test runs and enable it when intentionally re-publishing a historic version. Release events always upload regardless.
+A push to a `release/X.Y.Z` branch packages and uploads the source zip for version
+`X.Y.Z`. The `workflow_dispatch` trigger lets you exercise the full pipeline
+(stage → scan → zip → verify-build) on demand, and can also repackage historic
+releases by setting `ref` to the relevant tag or commit SHA together with the matching
+`version`; its `upload` checkbox controls whether that run ships to Release Manager (as
+a `generic` artifact) — leave it off for test runs.
 
 The caller repository must:
 
 - Include `build-common` as a submodule at the repository root, pinned to a
-  commit that contains `scripts/source-release/stage.sh`.
+  commit that contains `scripts/source-release`.
 - Provide an allow-list of customer-facing csproj paths at the configured
   path (default `.github/source-release/projects.txt`).
-- Have a `*.slnx` file at the repository root. The staging script reads it
+- Have a `*.slnx` file at the repository root. The staging build reads it
   to know the original solution filename and reuses it for the customer-
   facing slnx so build instructions don't change. If multiple `.slnx` files
   exist at the root, set the `solution_file` input to disambiguate;
   otherwise the first one in filesystem order is picked. `.sln` is not
   currently supported.
 
-The reusable workflow and `stage.sh` rely on Linux tooling — GNU `readlink`,
-`jq`, `zip`/`unzip`, the AWS CLI — and only run on `ubuntu-latest`.
+The staging and verify-build jobs run on `ubuntu-latest` by default. For a library
+with **mobile (iOS/Android) target frameworks**, set `runs_on: macos-latest` and
+`install_workloads: android ios` on the caller: on Linux those TFMs are commonly
+dropped, so their sources would neither be staged nor verified, whereas a macOS agent
+stages and builds them. Staging runs as a NUKE build (`scripts/source-release`) on the
+.NET SDK already set up for the job; the surrounding workflow steps use `zip`/`unzip`
+and `curl`, all present on the GitHub ubuntu and macOS runners. The Release Manager
+upload job always runs on `ubuntu-latest`.
+
+```yaml
+    source-release:
+        needs: setup
+        uses: AvaloniaUI/build-common/.github/workflows/source-release.yml@<sha>
+        with:
+            project_name: Avalonia.Controls.Example
+            version: ${{ needs.setup.outputs.version }}
+            upload: ${{ needs.setup.outputs.upload == 'true' }}
+            runs_on: macos-latest          # mobile TFMs need a macOS agent
+            install_workloads: android ios
+            dotnet_sdk: 10.0.102
+            release_manager_base_url: ${{ vars.RELEASE_MANAGER_BASE_URL }}
+            release_manager_product: ${{ vars.RELEASE_MANAGER_PRODUCT_NAME }}
+        secrets:
+            checkout_token: ${{ secrets.SUBMODULE_TOKEN }}     # optional, only for private submodules
+            license_key: ${{ secrets.ACCELERATE_LICENSE_KEY }}
+            release_manager_api_key: ${{ secrets.RELEASE_MANAGER_API_KEY }}
+```

@@ -1,14 +1,17 @@
 name: Source Release
 
-# Reusable workflow that packages and ships a customer-facing source zip when a
-# library is released. Driven by an allow-list of customer-facing csproj paths
-# in the caller repo; uses scripts/source-release/stage.sh from build-common
+# Reusable workflow that packages and ships a customer-facing source zip as part of
+# a release. Callers invoke it on a push to a release/* branch, deriving the version
+# from the branch name and passing it as `version`, so the source zip ships alongside
+# the rest of the release. Driven by an allow-list of customer-facing csproj paths
+# in the caller repo; uses the scripts/source-release NUKE build from build-common
 # (consumed via the caller's submodule pin) to enumerate source files via
 # MSBuild and stage them, then scans, zips, verifies the zip builds, and
-# optionally uploads it to S3.
+# optionally uploads it to Release Manager as a `generic` artifact
+# (PUT /api/upload/<product>/<version>/generic/<filename>).
 #
 # Callers must check out build-common (typically as a submodule at the
-# repository root) at a SHA that includes scripts/source-release/stage.sh.
+# repository root) at a SHA that includes scripts/source-release.
 
 on:
     workflow_call:
@@ -17,8 +20,8 @@ on:
                 description: >-
                     Customer-facing project name. Used as the staged
                     directory name prefix (e.g. "Avalonia.Controls.TreeDataGrid"
-                    yields "Avalonia.Controls.TreeDataGrid-1.2.3"), the zip
-                    filename, and the default S3 key prefix.
+                    yields "Avalonia.Controls.TreeDataGrid-1.2.3") and the zip
+                    filename.
                 required: true
                 type: string
             allow_list:
@@ -43,11 +46,10 @@ on:
                 default: ""
             version:
                 description: >-
-                    Explicit version override (no leading `v`). When set,
-                    takes precedence over `github.event.release.tag_name`.
-                    Intended for `workflow_dispatch` test runs where there is
-                    no release event to read a tag from, and for repackaging
-                    historic releases.
+                    Version to package (no leading `v`). Callers derive it from
+                    the release/* branch name and pass it here; it takes
+                    precedence over `github.event.release.tag_name`. Also used by
+                    `workflow_dispatch` runs and for repackaging historic releases.
                 required: false
                 type: string
                 default: ""
@@ -60,57 +62,78 @@ on:
                 required: false
                 type: string
                 default: ""
-            s3_prefix:
+            upload:
                 description: >-
-                    S3 key prefix for the uploaded zip. Defaults to
-                    `project_name`. The full key is `<prefix>/<zip_name>`.
-                required: false
-                type: string
-                default: ""
-            upload_to_s3:
-                description: >-
-                    Whether to upload the zip to S3. Defaults to false so
-                    callers must opt in explicitly — release-triggered
-                    callers typically pass
-                    `github.event_name == 'release'`.
+                    Whether to upload the zip to Release Manager. Defaults to
+                    false so callers must opt in explicitly — callers pass `true`
+                    on a release/* branch push (the release path) and gate it
+                    behind a checkbox for `workflow_dispatch` test runs.
                 required: false
                 type: boolean
                 default: false
+            release_manager_base_url:
+                description: >-
+                    Base URL of the Release Manager instance, e.g.
+                    `https://release-manager.example.com` (no trailing path).
+                    The artifact is PUT to
+                    `<base>/api/upload/<product>/<version>/generic/<zip_name>`.
+                    Required when `upload` is true.
+                required: false
+                type: string
+                default: ""
+            release_manager_product:
+                description: >-
+                    Release Manager product slug (lowercase alphanumeric +
+                    hyphens) the artifact is published under. Required when
+                    `upload` is true.
+                required: false
+                type: string
+                default: ""
             dotnet_sdk:
                 description: .NET SDK version. Must be 9.0+ for `dotnet msbuild -getItem/-getProperty`.
                 required: false
                 type: string
                 default: 9.0.x
+            runs_on:
+                description: >-
+                    Runner for the staging and verify-build jobs. Defaults to
+                    `ubuntu-latest`. Set to `macos-latest` for libraries with
+                    mobile (iOS/Android) target frameworks: on Linux those TFMs
+                    are commonly dropped, so their sources would neither be
+                    staged nor verified — a macOS agent stages and builds them.
+                required: false
+                type: string
+                default: ubuntu-latest
+            install_workloads:
+                description: >-
+                    Space-separated .NET workloads to install before staging and
+                    verify-build (e.g. `android ios`). Required, together with a
+                    macOS `runs_on`, to stage and verify mobile target frameworks.
+                required: false
+                type: string
+                default: ""
         secrets:
             checkout_token:
-                description: PAT with access to private submodules.
-                required: true
+                description: >-
+                    PAT with access to private submodules. Falls back to
+                    `github.token` when not supplied.
+                required: false
             license_key:
                 description: >-
                     Avalonia license key used by the verify-build job. The
                     zip must build with a real license, so this is required.
                 required: true
-            aws_access_key_id:
-                required: false
-            aws_secret_access_key:
-                required: false
-            aws_region:
-                description: S3 region (e.g. `fr-par` for Scaleway, `us-east-1` for AWS).
-                required: false
-            s3_bucket_endpoint:
+            release_manager_api_key:
                 description: >-
-                    Virtual-hosted-style bucket URL, e.g.
-                    `https://my-bucket.s3.fr-par.scw.cloud` for Scaleway or
-                    `https://my-bucket.s3.us-east-1.amazonaws.com` for AWS.
-                    The workflow parses the bucket name and service endpoint
-                    out of this URL.
+                    Release Manager API key (sent as `Authorization: Bearer`).
+                    Required when `upload` is true.
                 required: false
 
 jobs:
 
     package:
         name: Scan & package source zip
-        runs-on: ubuntu-latest
+        runs-on: ${{ inputs.runs_on }}
         outputs:
             version: ${{ steps.version.outputs.version }}
             zip_name: ${{ steps.version.outputs.zip_name }}
@@ -120,13 +143,18 @@ jobs:
               uses: actions/checkout@v4
               with:
                   submodules: recursive
-                  token: ${{ secrets.checkout_token }}
+                  token: ${{ secrets.checkout_token != '' && secrets.checkout_token || github.token }}
                   ref: ${{ inputs.ref }}
 
             - name: Setup .NET
               uses: actions/setup-dotnet@v4
               with:
                   dotnet-version: ${{ inputs.dotnet_sdk }}
+
+            - name: Install .NET workloads
+              if: ${{ inputs.install_workloads != '' }}
+              shell: bash
+              run: dotnet workload install ${{ inputs.install_workloads }}
 
             - name: Resolve version
               id: version
@@ -158,13 +186,13 @@ jobs:
                   echo "zip_name=${zip_name}" >> "$GITHUB_OUTPUT"
                   echo "Resolved version: ${version} (from ${source})"
 
-            - name: Verify staging script is present
+            - name: Verify staging build is present
               shell: bash
               run: |
                   set -euo pipefail
-                  script="$GITHUB_WORKSPACE/build-common/scripts/source-release/stage.sh"
-                  if [[ ! -f "$script" ]]; then
-                      echo "::error::Expected staging script not found at build-common/scripts/source-release/stage.sh. Bump your build-common submodule pin to a commit that includes it." >&2
+                  project="$GITHUB_WORKSPACE/build-common/scripts/source-release/SourceRelease.csproj"
+                  if [[ ! -f "$project" ]]; then
+                      echo "::error::Expected staging build not found at build-common/scripts/source-release/SourceRelease.csproj. Bump your build-common submodule pin to a commit that includes it." >&2
                       exit 1
                   fi
 
@@ -174,11 +202,14 @@ jobs:
                   set -euo pipefail
                   staging_root="${RUNNER_TEMP}/staging"
                   staging_dir="${staging_root}/${{ steps.version.outputs.dir_name }}"
-                  bash "$GITHUB_WORKSPACE/build-common/scripts/source-release/stage.sh" \
-                      "$GITHUB_WORKSPACE" \
-                      "${{ inputs.allow_list }}" \
-                      "$staging_dir" \
-                      "${{ inputs.solution_file }}"
+                  args=(--target Stage
+                      --repo-root "$GITHUB_WORKSPACE"
+                      --allow-list "${{ inputs.allow_list }}"
+                      --staging-dir "$staging_dir")
+                  if [[ -n "${{ inputs.solution_file }}" ]]; then
+                      args+=(--solution-file "${{ inputs.solution_file }}")
+                  fi
+                  dotnet run --project "$GITHUB_WORKSPACE/build-common/scripts/source-release/SourceRelease.csproj" -- "${args[@]}"
                   echo "staging_dir=${staging_dir}" >> "$GITHUB_ENV"
                   echo "staging_root=${staging_root}" >> "$GITHUB_ENV"
 
@@ -191,7 +222,7 @@ jobs:
                   fail=0
 
                   # Online Avalonia license keys: avln_on_key:v1:<32 hex>
-                  matches=$(grep -RInE --binary-files=without-match \
+                  matches=$(grep -IRnE \
                       'avln_on_key:v1:[A-Fa-f0-9]{32}' "$staging_dir" || true)
                   if [[ -n "$matches" ]]; then
                       echo "::error::Online Avalonia license key(s) found:"
@@ -200,7 +231,7 @@ jobs:
                   fi
 
                   # Offline Avalonia license keys: avln_off_key:v1:<base64>:<base64>
-                  matches=$(grep -RInE --binary-files=without-match \
+                  matches=$(grep -IRnE \
                       'avln_off_key:v1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+' "$staging_dir" || true)
                   if [[ -n "$matches" ]]; then
                       echo "::error::Offline Avalonia license key(s) found:"
@@ -220,10 +251,10 @@ jobs:
                   fi
 
                   # Belt-and-braces: any package-source-credential markers anywhere.
-                  matches=$(grep -RInE --binary-files=without-match \
+                  matches=$(grep -IRnE \
                       -e '<packageSourceCredentials' \
                       -e 'ClearTextPassword' \
-                      -e '<Password\b' \
+                      -e '<Password[[:space:]/>]' \
                       "$staging_dir" || true)
                   if [[ -n "$matches" ]]; then
                       echo "::error::Possible NuGet credential markers found:"
@@ -255,12 +286,17 @@ jobs:
     verify-build:
         name: Verify zip is buildable
         needs: package
-        runs-on: ubuntu-latest
+        runs-on: ${{ inputs.runs_on }}
         steps:
             - name: Setup .NET
               uses: actions/setup-dotnet@v4
               with:
                   dotnet-version: ${{ inputs.dotnet_sdk }}
+
+            - name: Install .NET workloads
+              if: ${{ inputs.install_workloads != '' }}
+              shell: bash
+              run: dotnet workload install ${{ inputs.install_workloads }}
 
             - name: Download source zip
               uses: actions/download-artifact@v4
@@ -292,47 +328,27 @@ jobs:
                   dotnet build "$slnx" -c Release
 
     upload:
-        name: Upload zip to S3
+        name: Upload zip to Release Manager
         needs: [package, verify-build]
-        if: ${{ inputs.upload_to_s3 }}
+        if: ${{ inputs.upload }}
         runs-on: ubuntu-latest
         steps:
-            - name: Validate upload secrets and parse bucket endpoint
-              id: s3
+            - name: Validate upload config
               shell: bash
               env:
-                  AWS_ACCESS_KEY_ID: ${{ secrets.aws_access_key_id }}
-                  AWS_SECRET_ACCESS_KEY: ${{ secrets.aws_secret_access_key }}
-                  AWS_REGION: ${{ secrets.aws_region }}
-                  S3_BUCKET_ENDPOINT: ${{ secrets.s3_bucket_endpoint }}
+                  RM_BASE_URL: ${{ inputs.release_manager_base_url }}
+                  RM_PRODUCT: ${{ inputs.release_manager_product }}
+                  RM_API_KEY: ${{ secrets.release_manager_api_key }}
               run: |
                   set -euo pipefail
                   missing=()
-                  [[ -z "$AWS_ACCESS_KEY_ID"     ]] && missing+=(aws_access_key_id)
-                  [[ -z "$AWS_SECRET_ACCESS_KEY" ]] && missing+=(aws_secret_access_key)
-                  [[ -z "$AWS_REGION"            ]] && missing+=(aws_region)
-                  [[ -z "$S3_BUCKET_ENDPOINT"    ]] && missing+=(s3_bucket_endpoint)
+                  [[ -z "$RM_BASE_URL" ]] && missing+=(release_manager_base_url)
+                  [[ -z "$RM_PRODUCT"  ]] && missing+=(release_manager_product)
+                  [[ -z "$RM_API_KEY"  ]] && missing+=(release_manager_api_key)
                   if (( ${#missing[@]} > 0 )); then
-                      echo "::error::upload_to_s3 is true but required secret(s) missing: ${missing[*]}" >&2
+                      echo "::error::upload is true but required config missing: ${missing[*]}" >&2
                       exit 1
                   fi
-
-                  # Parse virtual-hosted-style URL into bucket + service endpoint.
-                  # Split on `.s3.` (rather than the first dot) so bucket names
-                  # containing dots — e.g. https://my.bucket.s3.us-east-1.amazonaws.com
-                  # — are parsed as bucket=`my.bucket`, not bucket=`my`.
-                  if [[ "$S3_BUCKET_ENDPOINT" =~ ^(https?://)(.+)\.s3\.(.+)$ ]]; then
-                      scheme_prefix="${BASH_REMATCH[1]}"
-                      bucket="${BASH_REMATCH[2]}"
-                      host_after_s3="${BASH_REMATCH[3]}"
-                      endpoint="${scheme_prefix}s3.${host_after_s3}"
-                  else
-                      echo "::error::s3_bucket_endpoint must be a virtual-hosted-style URL like https://bucket.s3.region.example.com (got: ${S3_BUCKET_ENDPOINT})." >&2
-                      exit 1
-                  fi
-                  echo "bucket=${bucket}" >> "$GITHUB_OUTPUT"
-                  echo "endpoint=${endpoint}" >> "$GITHUB_OUTPUT"
-                  echo "Parsed bucket=${bucket}, endpoint=${endpoint}"
 
             - name: Download source zip
               uses: actions/download-artifact@v4
@@ -340,35 +356,51 @@ jobs:
                   name: source-zip
                   path: ${{ runner.temp }}/zip
 
-            - name: Upload to S3
+            - name: Upload to Release Manager
               shell: bash
               env:
-                  # Set creds directly rather than via aws-actions/configure-aws-credentials,
-                  # whose STS GetCallerIdentity call doesn't resolve against non-AWS S3
-                  # endpoints (e.g. Scaleway).
-                  AWS_ACCESS_KEY_ID: ${{ secrets.aws_access_key_id }}
-                  AWS_SECRET_ACCESS_KEY: ${{ secrets.aws_secret_access_key }}
-                  AWS_DEFAULT_REGION: ${{ secrets.aws_region }}
-                  S3_BUCKET: ${{ steps.s3.outputs.bucket }}
-                  S3_ENDPOINT: ${{ steps.s3.outputs.endpoint }}
-                  S3_PREFIX: ${{ inputs.s3_prefix != '' && inputs.s3_prefix || inputs.project_name }}
+                  RM_BASE_URL: ${{ inputs.release_manager_base_url }}
+                  RM_PRODUCT: ${{ inputs.release_manager_product }}
+                  RM_API_KEY: ${{ secrets.release_manager_api_key }}
                   ZIP_NAME: ${{ needs.package.outputs.zip_name }}
                   VERSION: ${{ needs.package.outputs.version }}
               run: |
                   set -euo pipefail
                   zip_path="${RUNNER_TEMP}/zip/${ZIP_NAME}"
-                  s3_key="${S3_PREFIX}/${ZIP_NAME}"
-                  s3_uri="s3://${S3_BUCKET}/${s3_key}"
+                  base_url="${RM_BASE_URL%/}"
+                  # The generic-artifact *filename* is Release Manager's stable
+                  # identifier for the artifact within a product, so it is the
+                  # fixed literal `source.zip` — version-independent (the version
+                  # already lives in the URL path) and the same across every repo.
+                  # A versioned or per-project filename would register a brand-new
+                  # artifact identity for every release. Upload the (versioned)
+                  # zip on disk under this version-independent name.
+                  artifact_name="source.zip"
+                  # PUT <base>/api/upload/<product>/<version>/generic/<filename>  (web-api §13.2)
+                  upload_url="${base_url}/api/upload/${RM_PRODUCT}/${VERSION}/generic/${artifact_name}"
 
-                  aws s3 cp "$zip_path" "$s3_uri" \
-                      --endpoint-url "$S3_ENDPOINT" \
-                      --no-progress \
-                      --content-type application/zip
+                  echo "Uploading ${ZIP_NAME} as ${artifact_name} (version ${VERSION}) to ${upload_url}"
+                  http_code=$(curl -sS -o "${RUNNER_TEMP}/rm_response.json" -w '%{http_code}' \
+                      -X PUT \
+                      -H "Authorization: Bearer ${RM_API_KEY}" \
+                      -H "Content-Type: application/octet-stream" \
+                      --data-binary "@${zip_path}" \
+                      "$upload_url")
+
+                  echo "Release Manager responded HTTP ${http_code}"
+                  cat "${RUNNER_TEMP}/rm_response.json" 2>/dev/null || true
+                  echo
+                  # 201 Created on first upload, 200 OK on overwrite.
+                  if [[ "$http_code" != "200" && "$http_code" != "201" ]]; then
+                      echo "::error::Release Manager upload failed with HTTP ${http_code}." >&2
+                      exit 1
+                  fi
 
                   {
-                      echo "### Source zip uploaded"
+                      echo "### Source zip uploaded to Release Manager"
                       echo ""
                       echo "- **Version:** \`${VERSION}\`"
-                      echo "- **S3 URI:** \`${s3_uri}\`"
-                      echo "- **Endpoint:** \`${S3_ENDPOINT}\`"
+                      echo "- **Product:** \`${RM_PRODUCT}\`"
+                      echo "- **Artifact:** \`${artifact_name}\` (generic)"
+                      echo "- **Endpoint:** \`${upload_url}\`"
                   } >> "$GITHUB_STEP_SUMMARY"
