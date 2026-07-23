@@ -17,7 +17,7 @@ Common build targets and scripts necessary for libraries and components
 5. Some branding images, like default nuget package icon
 6. Reusable GitHub Actions workflows under `.github/workflows/`:
     - `library-cicd.yml` — build, test, pack, push, and optionally GitHub-release a library.
-    - `source-release.yml` — package a customer-facing source zip when a library is released. See `scripts/source-release/stage.sh`.
+    - `source-release.yml` — package a customer-facing source zip when a library is released. See the `scripts/source-release` NUKE build.
 
 ## Source-release workflow
 
@@ -108,10 +108,10 @@ a `generic` artifact) — leave it off for test runs.
 The caller repository must:
 
 - Include `build-common` as a submodule at the repository root, pinned to a
-  commit that contains `scripts/source-release/stage.sh`.
+  commit that contains `scripts/source-release`.
 - Provide an allow-list of customer-facing csproj paths at the configured
   path (default `.github/source-release/projects.txt`).
-- Have a `*.slnx` file at the repository root. The staging script reads it
+- Have a `*.slnx` file at the repository root. The staging build reads it
   to know the original solution filename and reuses it for the customer-
   facing slnx so build instructions don't change. If multiple `.slnx` files
   exist at the root, set the `solution_file` input to disambiguate;
@@ -122,9 +122,10 @@ The staging and verify-build jobs run on `ubuntu-latest` by default. For a libra
 with **mobile (iOS/Android) target frameworks**, set `runs_on: macos-latest` and
 `install_workloads: android ios` on the caller: on Linux those TFMs are commonly
 dropped, so their sources would neither be staged nor verified, whereas a macOS agent
-stages and builds them. `stage.sh` needs `jq`, `zip`/`unzip`, `curl`, and `python3`
-(a portable fallback for GNU `readlink`), all present on the GitHub ubuntu and macOS
-runners. The Release Manager upload job always runs on `ubuntu-latest`.
+stages and builds them. Staging runs as a NUKE build (`scripts/source-release`) on the
+.NET SDK already set up for the job; the surrounding workflow steps use `zip`/`unzip`
+and `curl`, all present on the GitHub ubuntu and macOS runners. The Release Manager
+upload job always runs on `ubuntu-latest`.
 
 ```yaml
     source-release:

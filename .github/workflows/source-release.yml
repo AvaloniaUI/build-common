@@ -4,14 +4,14 @@ name: Source Release
 # a release. Callers invoke it on a push to a release/* branch, deriving the version
 # from the branch name and passing it as `version`, so the source zip ships alongside
 # the rest of the release. Driven by an allow-list of customer-facing csproj paths
-# in the caller repo; uses scripts/source-release/stage.sh from build-common
+# in the caller repo; uses the scripts/source-release NUKE build from build-common
 # (consumed via the caller's submodule pin) to enumerate source files via
 # MSBuild and stage them, then scans, zips, verifies the zip builds, and
 # optionally uploads it to Release Manager as a `generic` artifact
 # (PUT /api/upload/<product>/<version>/generic/<filename>).
 #
 # Callers must check out build-common (typically as a submodule at the
-# repository root) at a SHA that includes scripts/source-release/stage.sh.
+# repository root) at a SHA that includes scripts/source-release.
 
 on:
     workflow_call:
@@ -186,13 +186,13 @@ jobs:
                   echo "zip_name=${zip_name}" >> "$GITHUB_OUTPUT"
                   echo "Resolved version: ${version} (from ${source})"
 
-            - name: Verify staging script is present
+            - name: Verify staging build is present
               shell: bash
               run: |
                   set -euo pipefail
-                  script="$GITHUB_WORKSPACE/build-common/scripts/source-release/stage.sh"
-                  if [[ ! -f "$script" ]]; then
-                      echo "::error::Expected staging script not found at build-common/scripts/source-release/stage.sh. Bump your build-common submodule pin to a commit that includes it." >&2
+                  project="$GITHUB_WORKSPACE/build-common/scripts/source-release/SourceRelease.csproj"
+                  if [[ ! -f "$project" ]]; then
+                      echo "::error::Expected staging build not found at build-common/scripts/source-release/SourceRelease.csproj. Bump your build-common submodule pin to a commit that includes it." >&2
                       exit 1
                   fi
 
@@ -202,11 +202,14 @@ jobs:
                   set -euo pipefail
                   staging_root="${RUNNER_TEMP}/staging"
                   staging_dir="${staging_root}/${{ steps.version.outputs.dir_name }}"
-                  bash "$GITHUB_WORKSPACE/build-common/scripts/source-release/stage.sh" \
-                      "$GITHUB_WORKSPACE" \
-                      "${{ inputs.allow_list }}" \
-                      "$staging_dir" \
-                      "${{ inputs.solution_file }}"
+                  args=(--target Stage
+                      --repo-root "$GITHUB_WORKSPACE"
+                      --allow-list "${{ inputs.allow_list }}"
+                      --staging-dir "$staging_dir")
+                  if [[ -n "${{ inputs.solution_file }}" ]]; then
+                      args+=(--solution-file "${{ inputs.solution_file }}")
+                  fi
+                  dotnet run --project "$GITHUB_WORKSPACE/build-common/scripts/source-release/SourceRelease.csproj" -- "${args[@]}"
                   echo "staging_dir=${staging_dir}" >> "$GITHUB_ENV"
                   echo "staging_root=${staging_root}" >> "$GITHUB_ENV"
 
