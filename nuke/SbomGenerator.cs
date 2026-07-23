@@ -12,6 +12,7 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Nuke.Common.IO;
 using Nuke.Common.Tooling;
+using NuGet.Versioning;
 using static Serilog.Log;
 
 namespace NukeExtensions;
@@ -494,7 +495,7 @@ public static class SbomGenerator
         // to the SBOM scan within one run, and the version-less Generate overload reads the
         // version from the nuspec itself.
         var scannedVersion = component["version"]?.GetValue<string>();
-        if (scannedVersion is not null && scannedVersion != meta.Version)
+        if (scannedVersion is not null && !IsSameVersion(scannedVersion, meta.Version))
             throw new InvalidOperationException(
                 $"SBOM: '{meta.Id}' was scanned as version '{scannedVersion}' but the shipped package is '{meta.Version}' - are the packages stale?");
         component["version"] = meta.Version;
@@ -535,6 +536,14 @@ public static class SbomGenerator
         if (supplier is not null && merged["metadata"] is JsonObject metadata)
             metadata["supplier"] = supplier.DeepClone();
     }
+
+    // NuGet pack normalizes whatever version it is handed ("12.2" ships as "12.2.0"), so the
+    // build-supplied and nuspec strings can spell the same version differently; only a semantic
+    // difference means the packages are stale. Unparseable versions keep the exact-string check.
+    static bool IsSameVersion(string scanned, string shipped) =>
+        NuGetVersion.TryParse(scanned, out var scannedVersion) && NuGetVersion.TryParse(shipped, out var shippedVersion)
+            ? scannedVersion == shippedVersion
+            : string.Equals(scanned, shipped, StringComparison.Ordinal);
 
     // Cross-checks the SBOM against the shipped .nuspec's <dependencies>: everything declared
     // there is restored on the consumer's machine, so it's part of the delivered dependency graph
