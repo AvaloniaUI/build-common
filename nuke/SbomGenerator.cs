@@ -1236,7 +1236,9 @@ public static class SbomGenerator
         public ArchivePackageReader(Stream stream)
         {
             _stream = stream;
-            _zip = new ZipArchive(stream, ZipArchiveMode.Read);
+            // leaveOpen: this reader owns _stream and disposes it itself; without this ZipArchive
+            // would also dispose it, double-disposing the stream.
+            _zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
         }
 
         // Directory entries have an empty Name and no content of their own; skip them.
