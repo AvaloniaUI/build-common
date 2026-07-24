@@ -1007,8 +1007,14 @@ public static class SbomGenerator
             ?? throw new InvalidOperationException(
                 $"SBOM: '{Path.GetFileName(vsixPath)}' vsixmanifest has no <Identity> element.");
 
-        var id = identity.Attribute("Id")?.Value ?? "";
-        var version = identity.Attribute("Version")?.Value ?? "";
+        // Id and Version are required for a valid VSIX identity; without them the SBOM's root
+        // component (and its purl and output filename) would be empty/garbage. Fail loudly rather
+        // than emit meaningless CRA evidence - a well-formed VSIX always carries both.
+        var id = identity.Attribute("Id")?.Value;
+        var version = identity.Attribute("Version")?.Value;
+        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(version))
+            throw new InvalidOperationException(
+                $"SBOM: '{Path.GetFileName(vsixPath)}' vsixmanifest <Identity> is missing an Id or Version.");
 
         // Optional metadata may be present but blank (e.g. <License />); treat that as absent so the
         // SBOM doesn't carry a meaningless empty licence name, external-reference URL or description
