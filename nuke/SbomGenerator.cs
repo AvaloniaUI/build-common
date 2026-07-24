@@ -979,7 +979,11 @@ public static class SbomGenerator
                 continue;
             }
 
-            if (!IsShippedBinary(entry.FullPath) && !HasNativeExecutableHeader(entry))
+            // The header sniff only exists to catch the extensionless NativeAOT executable form, so
+            // restrict it to extensionless paths. Otherwise a directory-backed reader (a VSCode
+            // extension staging dir) would open and read the first bytes of every text/json file.
+            if (!IsShippedBinary(entry.FullPath)
+                && !(Path.GetExtension(entry.FullPath).Length == 0 && HasNativeExecutableHeader(entry)))
                 continue;
 
             using (var stream = entry.Open())
@@ -1006,8 +1010,8 @@ public static class SbomGenerator
     // A NativeAOT application ships as a native executable - app.exe on Windows, extensionless on
     // Linux and inside a macOS .app bundle - which is the package's primary deliverable and the one
     // binary that must not be missing from its SBOM. An extension list can't spot the extensionless
-    // form, so classify by the executable-format magic instead. Only the first bytes of the entry
-    // are inflated, so this stays cheap for the non-binary entries it rejects.
+    // form, so classify by the executable-format magic instead. Only invoked for extensionless
+    // entries (see the caller), and only the first bytes are read, so it stays cheap.
     static bool HasNativeExecutableHeader(IPackageEntry entry)
     {
         Span<byte> header = stackalloc byte[4];
