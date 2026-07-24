@@ -870,7 +870,8 @@ public static class SbomGenerator
             // represented; recording one component per localized assembly would only add noise (and
             // flag each as unaccounted third-party) without adding provenance. Excluded deliberately,
             // like @types/* npm stubs and ref/ reference assemblies.
-            if (assemblyName is not null && assemblyCulture is not null)
+            if (assemblyName is not null && assemblyCulture is not null
+                && simpleName.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
                 continue;
 
             // Third-party binaries already represented by a NuGet/npm component need no duplicate.
@@ -1270,11 +1271,14 @@ public static class SbomGenerator
     sealed class DirectoryPackageReader : IPackageReader
     {
         readonly AbsolutePath _directory;
+        IReadOnlyList<IPackageEntry>? _entries;
 
         public DirectoryPackageReader(AbsolutePath directory) => _directory = directory;
 
+        // GlobFiles is a full recursive filesystem walk; cache it so Find and Entries (both called on
+        // the same reader in the VSIX-directory path) don't each re-walk a large extension tree.
         public IEnumerable<IPackageEntry> Entries =>
-            _directory.GlobFiles("**/*").Select(f => (IPackageEntry)new Entry(_directory, f));
+            _entries ??= _directory.GlobFiles("**/*").Select(f => (IPackageEntry)new Entry(_directory, f)).ToList();
 
         public IPackageEntry? Find(Func<string, bool> pathPredicate) =>
             Entries.FirstOrDefault(e => pathPredicate(e.FullPath));
