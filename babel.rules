@@ -28,6 +28,24 @@
         <Pattern>Avalonia.Themes.*</Pattern>
     </Rule>
 
+    <Rule name="KeepNativeAotCrossAssemblyInputContracts"
+          feature="renaming"
+          exclude="true"
+          applyToMembers="true">
+
+        <Pattern isRegEx="true"><![CDATA[^Proscenium\.Automation\.Core\.Input\.Internal\.(BackendCoordinateSystem|IApplicationScopedElement|IInputCapableApplication|OsKeyboardEngine|OsPointerEngine|SessionInputSynthesizer)$]]></Pattern>
+        <Description>These internal contracts form an ABI between independently obfuscated implementation assemblies and the generated NativeAOT dispatcher.</Description>
+    </Rule>
+
+    <Rule name="KeepNativeAotCrossAssemblyCollectionContract"
+          feature="renaming"
+          exclude="true"
+          applyToMembers="true">
+
+        <Pattern>Proscenium.Automation.Core.Collections.ChannelObservableSnapshot*</Pattern>
+        <Description>This generic internal collection is shared by independently obfuscated implementation assemblies.</Description>
+    </Rule>
+
     <Rule name="DontOptimizeThemes"
           feature="optimizations"
           exclude="true"
