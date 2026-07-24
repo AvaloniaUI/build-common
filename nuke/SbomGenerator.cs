@@ -860,8 +860,18 @@ public static class SbomGenerator
 
         foreach (var (path, bytes) in EnumerateShippedBinaries(content))
         {
-            var assemblyName = TryReadAssemblyName(bytes, out var assemblyVersion);
+            var assemblyName = TryReadAssemblyName(bytes, out var assemblyVersion, out var assemblyCulture);
             var simpleName = assemblyName ?? BinaryName(path);
+
+            // A satellite resource assembly (<parent>.resources with a non-neutral culture) holds the
+            // localized resources of a parent assembly shipped alongside it in the same package - not
+            // an independent supply-chain artifact with its own code or version to track. Its parent
+            // is scanned in the same pass (in the package's base directory), so the package is already
+            // represented; recording one component per localized assembly would only add noise (and
+            // flag each as unaccounted third-party) without adding provenance. Excluded deliberately,
+            // like @types/* npm stubs and ref/ reference assemblies.
+            if (assemblyName is not null && assemblyCulture is not null)
+                continue;
 
             // Third-party binaries already represented by a NuGet/npm component need no duplicate.
             if (assemblyName is not null && representedNames.Contains(simpleName))
@@ -1029,10 +1039,14 @@ public static class SbomGenerator
         return ms.ToArray();
     }
 
-    // Returns the managed assembly's simple name (and version), or null for native / non-managed binaries.
-    static string? TryReadAssemblyName(byte[] bytes, out string? version)
+    // Returns the managed assembly's simple name (plus version and culture), or null for native /
+    // non-managed binaries. Culture is null for a normal culture-neutral assembly and set only for a
+    // satellite resource assembly (<parent>.resources under a culture directory), whose metadata
+    // carries the non-neutral culture the C# compiler stamps on it.
+    static string? TryReadAssemblyName(byte[] bytes, out string? version, out string? culture)
     {
         version = null;
+        culture = null;
         try
         {
             using var pe = new PEReader(new MemoryStream(bytes));
@@ -1043,6 +1057,8 @@ public static class SbomGenerator
                 return null;
             var assembly = reader.GetAssemblyDefinition();
             version = assembly.Version.ToString();
+            var cultureName = reader.GetString(assembly.Culture);
+            culture = string.IsNullOrEmpty(cultureName) ? null : cultureName;
             return reader.GetString(assembly.Name);
         }
         catch (BadImageFormatException)
