@@ -29,9 +29,16 @@ namespace NukeExtensions;
 // output into one shipped package should call GenerateForPackage directly with the full list
 // of constituent projects, so the merged-away projects' dependencies still appear in the SBOM.
 //
-// GenerateForVsix does the same for a Visual Studio extension (.vsix), which is also an OPC
-// package: the constituent scan, shipped-binary content check and embed machinery are shared,
-// and only the manifest it reads (extension.vsixmanifest vs .nuspec) differs.
+// GenerateForVsix / GenerateForVsixDirectory do the same for a Visual Studio extension (.vsix),
+// which is also an OPC package: the constituent scan, shipped-binary content check and embed
+// machinery are shared, and only the manifest it reads (extension.vsixmanifest vs .nuspec) differs.
+//
+// The content source is abstracted behind IPackageReader (see the ArchivePackageReader /
+// DirectoryPackageReader nested types) so the same core runs over either an already-built archive
+// (.nupkg, or a .vsix produced by an external packer like vsce) or a still-unzipped staging
+// directory. Scanning the staging directory - after obfuscation, before it's zipped - avoids
+// extracting-and-repacking an archive we just built, and lets the VSCode extension (a directory of
+// files before its packer zips it) reuse the same path. See maxkatz6 review r3644308722.
 public static class SbomGenerator
 {
     // The version parameter is optional: builds whose nuke script computes the package version
@@ -58,9 +65,17 @@ public static class SbomGenerator
 
         foreach (var nupkg in nupkgs)
         {
-            var meta = ReadNuspecMetadata((string)nupkg);
-            GenerateForPackage(cycloneDx, rootDirectory, nupkg, outputDirectory, version ?? meta.Version, meta.Id,
-                new[] { meta.Id });
+            string metaId, metaVersion;
+            using (var reader = new ArchivePackageReader((string)nupkg))
+            {
+                var meta = ReadNuspecMetadata(reader, nupkg.Name);
+                (metaId, metaVersion) = (meta.Id, meta.Version);
+            }
+
+            // GenerateForPackage reopens its own reader over the same .nupkg; the handle above is
+            // released first so there's no overlapping open on the file.
+            GenerateForPackage(cycloneDx, rootDirectory, nupkg, outputDirectory, version ?? metaVersion, metaId,
+                new[] { metaId });
         }
     }
 
@@ -96,14 +111,22 @@ public static class SbomGenerator
         // The final .nupkg carries the authoritative publisher/license/repository metadata and the
         // actual shipped binaries; use it to flesh out the thin root component cyclonedx-dotnet
         // emits and to verify nothing ships that the dependency scan didn't already account for.
+        Func<IPackageReader>? openContent =
+            packagePath is null ? null : () => new ArchivePackageReader((string)packagePath);
         PackageMetadata? meta = null;
-        if (packagePath is not null)
-            meta = ReadNuspecMetadata((string)packagePath);
+        if (openContent is not null)
+        {
+            using var reader = openContent();
+            meta = ReadNuspecMetadata(reader, packagePath!.Name);
+        }
         else
+        {
             Warning($"SBOM: couldn't find the built .nupkg for '{packageId}' - root metadata and package-content verification were skipped.");
+        }
 
-        FinalizeAndEmit(scan.Value, meta, packagePath, outputDirectory, version, packageId,
-            constituentProjectIds, additionalProductNames);
+        FinalizeAndEmit(scan.Value, meta, openContent, outputDirectory, version, packageId,
+            constituentProjectIds, additionalProductNames, Array.Empty<AbsolutePath>(),
+            packagePath is null ? null : json => EmbedSbomInArchive((string)packagePath, json));
     }
 
     // Generates the SBOM for a Visual Studio extension (.vsix) and embeds it at the same
@@ -119,26 +142,75 @@ public static class SbomGenerator
     // .nupkg, so the merged-away projects' dependencies still appear in the SBOM. The primary
     // extension assembly is one of those constituents (the root component is the VSIX bundle, not
     // any single assembly), so it is recorded as a bundled component rather than as the root.
+    //
+    // npmPackageJsons: package.json files whose production dependency tree the deliverable bundles
+    // (e.g. an esbuild bundle inlines them). Empty for the VS extension (pure .NET); the VSCode
+    // extension passes its own package.json. Their node_modules must be installed at scan time.
+    //
+    // This overload takes an already-built .vsix; GenerateForVsixDirectory takes the still-unzipped
+    // staging directory. Prefer the directory overload when we hold the extracted tree, so we don't
+    // extract-and-repack an archive we just built (maxkatz6 review r3644308722).
     public static void GenerateForVsix(Tool cycloneDx, AbsolutePath rootDirectory, AbsolutePath vsixPath,
         AbsolutePath outputDirectory, IReadOnlyList<string> constituentProjectIds,
+        IReadOnlyList<AbsolutePath>? npmPackageJsons = null,
         IReadOnlyList<string>? projectSearchDirs = null,
         IReadOnlyList<string>? additionalProductNames = null,
         AbsolutePath? baseIntermediateOutputPath = null)
     {
-        var meta = ReadVsixManifestMetadata((string)vsixPath);
-        var packageId = meta.Id;
-        var version = meta.Version;
+        GenerateForVsixCore(cycloneDx, rootDirectory,
+            () => new ArchivePackageReader((string)vsixPath), vsixPath.Name,
+            json => EmbedSbomInArchive(vsixPath, json),
+            outputDirectory, constituentProjectIds, npmPackageJsons,
+            projectSearchDirs, additionalProductNames, baseIntermediateOutputPath);
+    }
 
-        var scan = ScanConstituentProjects(cycloneDx, rootDirectory, outputDirectory, version, packageId,
+    // Generates the SBOM over a VSIX's still-unzipped staging directory (after obfuscation, before
+    // it's zipped) and embeds it - the SBOM part and the json content-type registration are written
+    // into the directory, so the subsequent zip includes them. Same core as GenerateForVsix; only
+    // the content source (a directory rather than an archive) and the embed target differ. This is
+    // the path maxkatz6 review r3644308722 asks for: no extract-and-repack, and directly reusable
+    // for VSCode. Metadata is read from <dir>/extension.vsixmanifest.
+    public static void GenerateForVsixDirectory(Tool cycloneDx, AbsolutePath rootDirectory,
+        AbsolutePath vsixContentDir, AbsolutePath outputDirectory, IReadOnlyList<string> constituentProjectIds,
+        IReadOnlyList<AbsolutePath>? npmPackageJsons = null,
+        IReadOnlyList<string>? projectSearchDirs = null,
+        IReadOnlyList<string>? additionalProductNames = null,
+        AbsolutePath? baseIntermediateOutputPath = null)
+    {
+        GenerateForVsixCore(cycloneDx, rootDirectory,
+            () => new DirectoryPackageReader(vsixContentDir), vsixContentDir.Name,
+            json => EmbedSbomInDirectory(vsixContentDir, json),
+            outputDirectory, constituentProjectIds, npmPackageJsons,
+            projectSearchDirs, additionalProductNames, baseIntermediateOutputPath);
+    }
+
+    // Shared by both VSIX overloads: reads the vsixmanifest through the supplied content reader,
+    // scans the constituent projects, then finalizes and embeds via the supplied embed callback.
+    // openContent is a factory (not a live reader) so the content handle is opened only for the
+    // scans and released before the embed callback writes back to the same location.
+    static void GenerateForVsixCore(Tool cycloneDx, AbsolutePath rootDirectory,
+        Func<IPackageReader> openContent, string sourceLabel, Action<string> embed,
+        AbsolutePath outputDirectory, IReadOnlyList<string> constituentProjectIds,
+        IReadOnlyList<AbsolutePath>? npmPackageJsons,
+        IReadOnlyList<string>? projectSearchDirs,
+        IReadOnlyList<string>? additionalProductNames,
+        AbsolutePath? baseIntermediateOutputPath)
+    {
+        PackageMetadata meta;
+        using (var reader = openContent())
+            meta = ReadVsixManifestMetadata(reader, sourceLabel);
+
+        var scan = ScanConstituentProjects(cycloneDx, rootDirectory, outputDirectory, meta.Version, meta.Id,
             constituentProjectIds, projectSearchDirs, baseIntermediateOutputPath);
         if (scan is null)
         {
-            Warning($"SBOM: no source projects could be scanned for '{packageId}', no SBOM was generated for it.");
+            Warning($"SBOM: no source projects could be scanned for '{meta.Id}', no SBOM was generated for it.");
             return;
         }
 
-        FinalizeAndEmit(scan.Value, meta, vsixPath, outputDirectory, version, packageId,
-            constituentProjectIds, additionalProductNames);
+        FinalizeAndEmit(scan.Value, meta, openContent, outputDirectory, meta.Version, meta.Id,
+            constituentProjectIds, additionalProductNames,
+            npmPackageJsons ?? Array.Empty<AbsolutePath>(), embed);
     }
 
     // The merged CycloneDX document from scanning every constituent project, along with the
@@ -217,32 +289,42 @@ public static class SbomGenerator
     }
 
     // Enriches the scanned dependency graph with everything only the shipped package can tell us -
-    // bundled webapp dependencies, authoritative root metadata, declared package dependencies and
-    // the actual shipped binaries - then writes the standalone SBOM and embeds a copy in the
-    // package. Shared by the .nupkg and .vsix paths; the only per-format input is `meta` (read from
-    // a .nuspec or an extension.vsixmanifest) and the package itself.
-    static void FinalizeAndEmit(ConstituentScan scan, PackageMetadata? meta, AbsolutePath? packagePath,
+    // bundled npm dependencies, authoritative root metadata, declared package dependencies and the
+    // actual shipped binaries - then writes the standalone SBOM and embeds a copy in the package.
+    // Shared by the .nupkg and .vsix paths; the per-format inputs are `meta` (read from a .nuspec or
+    // an extension.vsixmanifest), `openContent` (opens a reader over the archive or staging
+    // directory whose shipped bytes are scanned) and `embed` (writes the SBOM back into it).
+    //
+    // openContent is a factory rather than a live reader: the content handle is opened only for the
+    // shipped-binary scan and disposed before `embed` runs, so an archive can be reopened read/write
+    // to add the SBOM part without colliding with the read handle.
+    static void FinalizeAndEmit(ConstituentScan scan, PackageMetadata? meta, Func<IPackageReader>? openContent,
         AbsolutePath outputDirectory, string version, string packageId,
-        IReadOnlyList<string> constituentProjectIds, IReadOnlyList<string>? additionalProductNames)
+        IReadOnlyList<string> constituentProjectIds, IReadOnlyList<string>? additionalProductNames,
+        IReadOnlyList<AbsolutePath> extraNpmPackageJsons, Action<string>? embed)
     {
         var merged = scan.Merged;
         var seenComponentKeys = scan.SeenComponentKeys;
 
-        // cyclonedx-dotnet only sees the MSBuild/NuGet graph. Some projects also bundle a
-        // Bun/npm-built webapp directly into their published package - scan those separately
-        // so their shipped JS dependencies aren't silently absent from the SBOM.
+        // cyclonedx-dotnet only sees the MSBuild/NuGet graph. Some deliverables also bundle npm
+        // dependencies (a project that ships a Bun/npm-built webapp, or an IDE extension that *is*
+        // an npm package whose esbuild bundle inlines them) - scan those separately so their shipped
+        // JS dependencies aren't silently absent from the SBOM.
         var rootRef = merged["metadata"]?["component"]?["bom-ref"]?.GetValue<string>();
         foreach (var projectDir in scan.ScannedProjectDirs)
-            AddNpmComponents(merged, seenComponentKeys, projectDir, rootRef);
+            AddWebappNpmComponents(merged, seenComponentKeys, projectDir, rootRef);
+        foreach (var packageJson in extraNpmPackageJsons)
+            AddNpmComponentsFromPackageJson(merged, seenComponentKeys, packageJson, rootRef);
 
-        if (meta is not null && packagePath is not null)
+        if (meta is not null && openContent is not null)
         {
             EnrichRootComponent(merged, meta);
             AddDeclaredDependencyComponents(merged, seenComponentKeys, meta, rootRef);
             var productNames = additionalProductNames is null
                 ? constituentProjectIds
                 : constituentProjectIds.Concat(additionalProductNames).ToList();
-            AddPackageContentComponents(merged, seenComponentKeys, (string)packagePath, packageId,
+            using var content = openContent();
+            AddPackageContentComponents(merged, seenComponentKeys, content, packageId,
                 productNames, meta);
         }
 
@@ -257,9 +339,9 @@ public static class SbomGenerator
 
         // Embed the SBOM inside the shipped package so it travels with it, in addition to the
         // standalone copy written above (which CI publishes as the SBOM artifact) - belt and
-        // suspenders: consumers who only ever see the package still get its bill of materials.
-        if (packagePath is not null)
-            EmbedSbomInPackage(packagePath, sbomJson);
+        // suspenders: consumers who only ever see the package still get its bill of materials. The
+        // content reader is disposed above, so an archive embed can reopen the file read/write.
+        embed?.Invoke(sbomJson);
     }
 
     // The path inside the .nupkg where the CycloneDX SBOM is embedded. Mirrors the _manifest/
@@ -267,11 +349,13 @@ public static class SbomGenerator
     // *.cdx.json filename so tools that scan for that pattern still find it once unpacked.
     const string EmbeddedSbomEntryPath = "_manifest/cyclonedx/bom.cdx.json";
 
-    // Adds the generated SBOM as a new part inside the shipped package. Must run before the package
-    // is signed - a signature covers the whole archive, so adding a part afterwards would invalidate
-    // it. That holds here: .nupkgs are signed server-side by nuget.org on push, and a .vsix has its
-    // SBOM embedded during the merge/obfuscate repack, before any signing step - both after this.
-    static void EmbedSbomInPackage(AbsolutePath packagePath, string sbomJson)
+    // Adds the generated SBOM as a new part inside an already-built package archive (.nupkg, or a
+    // .vsix produced by an external packer). Must run before the package is signed - a signature
+    // covers the whole archive, so adding a part afterwards would invalidate it. That holds here:
+    // .nupkgs are signed server-side by nuget.org on push, and the VSCode .vsix is embedded before
+    // the marketplace signs it. The VS extension embeds via EmbedSbomInDirectory instead (before the
+    // archive exists at all), so this archive path only re-checks the signature defensively.
+    static void EmbedSbomInArchive(AbsolutePath packagePath, string sbomJson)
     {
         using var file = File.Open(packagePath, FileMode.Open, FileAccess.ReadWrite);
         using var zip = new ZipArchive(file, ZipArchiveMode.Update);
@@ -294,16 +378,30 @@ public static class SbomGenerator
         using (var writer = new StreamWriter(entryStream))
             writer.Write(sbomJson);
 
-        EnsureJsonContentTypeRegistered(zip);
+        EnsureJsonContentTypeRegisteredInArchive(zip);
     }
 
-    // A .nupkg is an OPC package: every part's extension must be declared in [Content_Types].xml or
-    // strict OPC readers - including NuGet's own signature verification - reject the package. The
-    // SBOM is a .json part, so register that extension before (or as) we add it.
-    static void EnsureJsonContentTypeRegistered(ZipArchive zip)
+    // Embeds the SBOM into a still-unzipped package staging directory (the counterpart to
+    // EmbedSbomInArchive), so the subsequent zip includes it without our extracting-and-repacking an
+    // archive we just built. The directory is pre-signature by construction - the caller is about to
+    // zip it - so there's no signature to invalidate. Still registers the json content-type so the
+    // eventual OPC package validates.
+    static void EmbedSbomInDirectory(AbsolutePath contentDir, string sbomJson)
+    {
+        var sbomPath = contentDir / EmbeddedSbomEntryPath;
+        sbomPath.Parent.CreateDirectory();
+        File.WriteAllText(sbomPath, sbomJson);
+
+        EnsureJsonContentTypeRegisteredInDirectory(contentDir);
+    }
+
+    // A .nupkg / .vsix is an OPC package: every part's extension must be declared in
+    // [Content_Types].xml or strict OPC readers - including NuGet's own signature verification -
+    // reject the package. The SBOM is a .json part, so register that extension before (or as) we add
+    // it. Two shapes: the entry inside an open archive, or the file on disk in a staging directory.
+    static void EnsureJsonContentTypeRegisteredInArchive(ZipArchive zip)
     {
         const string contentTypesEntryName = "[Content_Types].xml";
-        XNamespace ns = "http://schemas.openxmlformats.org/package/2006/content-types";
 
         var entry = zip.GetEntry(contentTypesEntryName);
         if (entry is null)
@@ -313,18 +411,42 @@ public static class SbomGenerator
         using (var read = entry.Open())
             doc = XDocument.Load(read);
 
-        var alreadyRegistered = doc.Root!.Elements(ns + "Default")
-            .Any(d => string.Equals((string?)d.Attribute("Extension"), "json", StringComparison.OrdinalIgnoreCase));
-        if (alreadyRegistered)
+        if (!TryRegisterJsonContentType(doc))
             return;
-
-        doc.Root.Add(new XElement(ns + "Default",
-            new XAttribute("Extension", "json"),
-            new XAttribute("ContentType", "application/json")));
 
         entry.Delete();
         using var write = zip.CreateEntry(contentTypesEntryName).Open();
         doc.Save(write);
+    }
+
+    static void EnsureJsonContentTypeRegisteredInDirectory(AbsolutePath contentDir)
+    {
+        var contentTypesFile = contentDir / "[Content_Types].xml";
+        if (!contentTypesFile.FileExists())
+            return; // not a well-formed OPC package; don't fabricate one
+
+        var doc = XDocument.Load(contentTypesFile);
+        if (!TryRegisterJsonContentType(doc))
+            return;
+
+        doc.Save(contentTypesFile);
+    }
+
+    // Adds a Default json content-type to the [Content_Types].xml document if absent. Returns true
+    // if it modified the document (so the caller writes it back), false if json was already declared.
+    static bool TryRegisterJsonContentType(XDocument doc)
+    {
+        XNamespace ns = "http://schemas.openxmlformats.org/package/2006/content-types";
+
+        var alreadyRegistered = doc.Root!.Elements(ns + "Default")
+            .Any(d => string.Equals((string?)d.Attribute("Extension"), "json", StringComparison.OrdinalIgnoreCase));
+        if (alreadyRegistered)
+            return false;
+
+        doc.Root.Add(new XElement(ns + "Default",
+            new XAttribute("Extension", "json"),
+            new XAttribute("ContentType", "application/json")));
+        return true;
     }
 
     static void PruneDanglingDependencyEdges(JsonObject merged)
@@ -383,33 +505,49 @@ public static class SbomGenerator
         }
     }
 
-    // Scans <projectDir>/**/webapp/package.json for production "dependencies" (deliberately
-    // ignoring devDependencies, which never ship) and adds them - plus their transitive
-    // dependencies, walked through the installed node_modules - as fully-formed components:
-    // bom-ref, resolved version, license, and dependency-graph edges, matching the shape of the
-    // NuGet components cyclonedx-dotnet emits so npm packages aren't second-class SBOM entries.
-    // Versions come from the actually-installed node_modules (same rationale as reading
-    // project.assets.json rather than trusting floating ranges).
-    static void AddNpmComponents(JsonObject merged, HashSet<string> seenComponentKeys, AbsolutePath projectDir,
+    // Scans every <projectDir>/**/webapp/package.json - a project that bundles a Bun/npm-built
+    // webapp directly into its shipped .nupkg - adding each one's dependencies via
+    // AddNpmComponentsFromPackageJson.
+    static void AddWebappNpmComponents(JsonObject merged, HashSet<string> seenComponentKeys, AbsolutePath projectDir,
         string? rootRef)
     {
-        foreach (string packageJsonPath in projectDir.GlobFiles("**/webapp/package.json"))
-        {
-            var packageJson = JsonNode.Parse(File.ReadAllText(packageJsonPath))!.AsObject();
-            var nodeModules = ((AbsolutePath)packageJsonPath).Parent / "node_modules";
-            var dependencies = packageJson["dependencies"]?.AsObject() ?? new JsonObject();
+        foreach (var packageJsonPath in projectDir.GlobFiles("**/webapp/package.json"))
+            AddNpmComponentsFromPackageJson(merged, seenComponentKeys, packageJsonPath, rootRef);
+    }
 
-            // The webapp is bundled into the shipped package, so its direct production
-            // dependencies are direct dependencies of the final NuGet package.
-            foreach (var (name, rangeNode) in dependencies)
-            {
-                if (IsTypeOnlyPackage(name))
-                    continue;
-                var purl = AddNpmComponentTree(merged, seenComponentKeys, nodeModules, name,
-                    rangeNode!.GetValue<string>(), nodeModules);
-                if (rootRef is not null)
-                    AddDependsOn(merged, rootRef, purl);
-            }
+    // Adds an npm package.json's production "dependencies" (deliberately ignoring devDependencies,
+    // which never ship) - plus their transitive dependencies, walked through the installed
+    // node_modules - as fully-formed components: bom-ref, resolved version, license, and
+    // dependency-graph edges, matching the shape of the NuGet components cyclonedx-dotnet emits so
+    // npm packages aren't second-class SBOM entries. Versions come from the actually-installed
+    // node_modules (same rationale as reading project.assets.json rather than trusting floating
+    // ranges), so node_modules must be installed at scan time.
+    //
+    // Used both for a webapp bundled inside a .NET package and for an IDE extension that *is* an npm
+    // package (VSCode), whose bundler (esbuild) inlines exactly these production deps into the
+    // shipped bundle. The deps are direct dependencies of the shipped deliverable, so each is linked
+    // under its root component.
+    static void AddNpmComponentsFromPackageJson(JsonObject merged, HashSet<string> seenComponentKeys,
+        AbsolutePath packageJsonPath, string? rootRef)
+    {
+        if (!packageJsonPath.FileExists())
+        {
+            Warning($"SBOM: npm manifest '{packageJsonPath}' doesn't exist - no npm components were added from it.");
+            return;
+        }
+
+        var packageJson = JsonNode.Parse(File.ReadAllText(packageJsonPath))!.AsObject();
+        var nodeModules = packageJsonPath.Parent / "node_modules";
+        var dependencies = packageJson["dependencies"]?.AsObject() ?? new JsonObject();
+
+        foreach (var (name, rangeNode) in dependencies)
+        {
+            if (IsTypeOnlyPackage(name))
+                continue;
+            var purl = AddNpmComponentTree(merged, seenComponentKeys, nodeModules, name,
+                rangeNode!.GetValue<string>(), nodeModules);
+            if (rootRef is not null)
+                AddDependsOn(merged, rootRef, purl);
         }
     }
 
@@ -698,7 +836,7 @@ public static class SbomGenerator
     // not imply a dependency. They stay flat top-level components (not nested subcomponents) so their
     // per-assembly hashes remain visible to scanners that ignore nested components.
     static void AddPackageContentComponents(JsonObject merged, HashSet<string> seenComponentKeys,
-        string packagePath, string packageId, IReadOnlyList<string> firstPartyNames, PackageMetadata meta)
+        IPackageReader content, string packageId, IReadOnlyList<string> firstPartyNames, PackageMetadata meta)
     {
         var productNames = new HashSet<string>(firstPartyNames, StringComparer.OrdinalIgnoreCase) { packageId };
         var representedNames = (merged["components"]?.AsArray() ?? new JsonArray())
@@ -720,9 +858,7 @@ public static class SbomGenerator
         // bom-refs of every shipped binary added below; declared as a complete assembly at the end.
         var assemblyRefs = new List<string>();
 
-        using var file = File.Open(packagePath, FileMode.Open, FileAccess.Read);
-        using var zip = new ZipArchive(file, ZipArchiveMode.Read);
-        foreach (var (path, bytes) in EnumerateShippedBinaries(zip))
+        foreach (var (path, bytes) in EnumerateShippedBinaries(content))
         {
             var assemblyName = TryReadAssemblyName(bytes, out var assemblyVersion);
             var simpleName = assemblyName ?? BinaryName(path);
@@ -800,6 +936,7 @@ public static class SbomGenerator
     }
 
     // Walks the package for shipped binaries, yielding each as (path inside the package, bytes).
+    // Works over either an archive or a staging directory via IPackageReader.
     //
     // Descends into nested .zip entries: a NativeAOT tool package ships its macOS build as a
     // zipped .app bundle (re-zipping it in the .nupkg is what preserves the bundle structure and
@@ -807,37 +944,36 @@ public static class SbomGenerator
     // down. Without this the macOS package would record no shipped binaries at all while the
     // Windows and Linux packages record theirs.
     static IEnumerable<(string Path, byte[] Bytes)> EnumerateShippedBinaries(
-        ZipArchive archive, string pathPrefix = "")
+        IPackageReader reader, string pathPrefix = "")
     {
-        foreach (var entry in archive.Entries)
+        foreach (var entry in reader.Entries)
         {
-            // Directory entries have an empty Name and no content of their own.
-            if (entry.Name.Length == 0)
-                continue;
-
-            var path = pathPrefix + entry.FullName;
+            var path = pathPrefix + entry.FullPath;
 
             // Reference assemblies under ref/ are compile-time surface, not shipped runtime code;
             // the real implementation lives under lib/ and is scanned there. Only meaningful at the
             // package root - a ref/ directory inside a bundled app is that app's own layout.
-            if (pathPrefix.Length == 0 && entry.FullName.StartsWith("ref/", StringComparison.OrdinalIgnoreCase))
+            if (pathPrefix.Length == 0 && entry.FullPath.StartsWith("ref/", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            if (Path.GetExtension(entry.FullName).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+            if (Path.GetExtension(entry.FullPath).Equals(".zip", StringComparison.OrdinalIgnoreCase))
             {
-                // Buffered into memory because ZipArchive needs a seekable stream, which the
-                // deflate stream of an entry is not.
-                using var nestedBytes = new MemoryStream(ReadEntry(entry));
-                using var nested = new ZipArchive(nestedBytes, ZipArchiveMode.Read);
+                // Buffered into memory because ZipArchive needs a seekable stream, which neither a
+                // zip entry's deflate stream nor a forward-only file stream guarantees.
+                byte[] nestedBytes;
+                using (var stream = entry.Open())
+                    nestedBytes = ReadAllBytes(stream);
+                using var nested = new ArchivePackageReader(new MemoryStream(nestedBytes));
                 foreach (var inner in EnumerateShippedBinaries(nested, path + "/"))
                     yield return inner;
                 continue;
             }
 
-            if (!IsShippedBinary(entry.FullName) && !HasNativeExecutableHeader(entry))
+            if (!IsShippedBinary(entry.FullPath) && !HasNativeExecutableHeader(entry))
                 continue;
 
-            yield return (path, ReadEntry(entry));
+            using (var stream = entry.Open())
+                yield return (path, ReadAllBytes(stream));
         }
     }
 
@@ -862,7 +998,7 @@ public static class SbomGenerator
     // binary that must not be missing from its SBOM. An extension list can't spot the extensionless
     // form, so classify by the executable-format magic instead. Only the first bytes of the entry
     // are inflated, so this stays cheap for the non-binary entries it rejects.
-    static bool HasNativeExecutableHeader(ZipArchiveEntry entry)
+    static bool HasNativeExecutableHeader(IPackageEntry entry)
     {
         Span<byte> header = stackalloc byte[4];
         using var stream = entry.Open();
@@ -886,9 +1022,8 @@ public static class SbomGenerator
         BinaryPrimitives.ReadUInt32BigEndian(header) == magic
         || BinaryPrimitives.ReadUInt32LittleEndian(header) == magic;
 
-    static byte[] ReadEntry(ZipArchiveEntry entry)
+    static byte[] ReadAllBytes(Stream stream)
     {
-        using var stream = entry.Open();
         using var ms = new MemoryStream();
         stream.CopyTo(ms);
         return ms.ToArray();
@@ -938,13 +1073,14 @@ public static class SbomGenerator
         public List<(string Id, string Version)> Dependencies = new();
     }
 
-    static PackageMetadata ReadNuspecMetadata(string nupkgPath)
+    static PackageMetadata ReadNuspecMetadata(IPackageReader reader, string sourceLabel)
     {
-        using var file = File.Open(nupkgPath, FileMode.Open, FileAccess.Read);
-        using var zip = new ZipArchive(file, ZipArchiveMode.Read);
-        // Case-insensitive to match NuGet's own PackageArchiveReader manifest lookup.
-        var nuspecEntry = zip.Entries.First(e =>
-            e.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase) && e.FullName == e.Name);
+        // Case-insensitive, root-level (no path separator) to match NuGet's own PackageArchiveReader
+        // manifest lookup.
+        var nuspecEntry = reader.Find(p =>
+            p.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase) && !p.Contains('/'))
+            ?? throw new InvalidOperationException(
+                $"SBOM: '{sourceLabel}' has no root .nuspec - is it a valid NuGet package?");
         using var nuspecStream = nuspecEntry.Open();
         var metadata = XDocument.Load(nuspecStream).Root!
             .Elements().First(x => x.Name.LocalName == "metadata");
@@ -986,14 +1122,12 @@ public static class SbomGenerator
     // list (a VSIX bundles everything it needs) and no repository/copyright fields, so those stay
     // empty; Id/Version/Publisher/License/description come from the <Metadata> block. Parsed by
     // LocalName so the vsx-schema namespace version doesn't matter.
-    static PackageMetadata ReadVsixManifestMetadata(string vsixPath)
+    static PackageMetadata ReadVsixManifestMetadata(IPackageReader reader, string sourceLabel)
     {
-        using var file = File.Open(vsixPath, FileMode.Open, FileAccess.Read);
-        using var zip = new ZipArchive(file, ZipArchiveMode.Read);
-        var manifestEntry = zip.Entries.FirstOrDefault(e =>
-            e.FullName.Equals("extension.vsixmanifest", StringComparison.OrdinalIgnoreCase))
+        var manifestEntry = reader.Find(p =>
+            p.Equals("extension.vsixmanifest", StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidOperationException(
-                $"SBOM: '{Path.GetFileName(vsixPath)}' has no extension.vsixmanifest - is it a valid VSIX?");
+                $"SBOM: '{sourceLabel}' has no extension.vsixmanifest - is it a valid VSIX?");
         using var stream = manifestEntry.Open();
         var root = XDocument.Load(stream).Root!;
 
@@ -1002,10 +1136,10 @@ public static class SbomGenerator
 
         var metadata = Child(root, "Metadata")
             ?? throw new InvalidOperationException(
-                $"SBOM: '{Path.GetFileName(vsixPath)}' vsixmanifest has no <Metadata> element.");
+                $"SBOM: '{sourceLabel}' vsixmanifest has no <Metadata> element.");
         var identity = Child(metadata, "Identity")
             ?? throw new InvalidOperationException(
-                $"SBOM: '{Path.GetFileName(vsixPath)}' vsixmanifest has no <Identity> element.");
+                $"SBOM: '{sourceLabel}' vsixmanifest has no <Identity> element.");
 
         // Id and Version are required for a valid VSIX identity; without them the SBOM's root
         // component (and its purl and output filename) would be empty/garbage. Fail loudly rather
@@ -1014,7 +1148,7 @@ public static class SbomGenerator
         var version = identity.Attribute("Version")?.Value;
         if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(version))
             throw new InvalidOperationException(
-                $"SBOM: '{Path.GetFileName(vsixPath)}' vsixmanifest <Identity> is missing an Id or Version.");
+                $"SBOM: '{sourceLabel}' vsixmanifest <Identity> is missing an Id or Version.");
 
         // Optional metadata may be present but blank (e.g. <License />); treat that as absent so the
         // SBOM doesn't carry a meaningless empty licence name, external-reference URL or description
@@ -1037,9 +1171,101 @@ public static class SbomGenerator
         };
     }
 
-    public static string ReadPackageId(string nupkgPath) => ReadNuspecMetadata(nupkgPath).Id;
+    public static string ReadPackageId(string nupkgPath)
+    {
+        using var reader = new ArchivePackageReader(nupkgPath);
+        return ReadNuspecMetadata(reader, ((AbsolutePath)nupkgPath).Name).Id;
+    }
 
     // For repositories that call GenerateForPackage directly but whose package versions are
     // computed by MSBuild: the shipped .nuspec is authoritative for what was actually packed.
-    public static string ReadPackageVersion(string nupkgPath) => ReadNuspecMetadata(nupkgPath).Version;
+    public static string ReadPackageVersion(string nupkgPath)
+    {
+        using var reader = new ArchivePackageReader(nupkgPath);
+        return ReadNuspecMetadata(reader, ((AbsolutePath)nupkgPath).Name).Version;
+    }
+
+    // Abstracts the two shapes a built package takes at SBOM time: an already-built archive (a
+    // .nupkg, or a .vsix produced by an external packer like vsce) or a still-unzipped staging
+    // directory (an IDE extension after obfuscation, before it's zipped). The manifest read and the
+    // shipped-binary scan are identical for both; only how entries are enumerated and opened
+    // differs. See maxkatz6 review r3644308722.
+    interface IPackageEntry
+    {
+        // '/'-separated path within the package (matches ZipArchiveEntry.FullName's separator so the
+        // same predicates and prefixes work for both backends).
+        string FullPath { get; }
+        Stream Open();
+    }
+
+    interface IPackageReader : IDisposable
+    {
+        // Files only (no directory entries), for the shipped-binary scan.
+        IEnumerable<IPackageEntry> Entries { get; }
+        // Locates a single entry (e.g. the manifest) by its package-relative path, or null if absent.
+        IPackageEntry? Find(Func<string, bool> pathPredicate);
+    }
+
+    sealed class ArchivePackageReader : IPackageReader
+    {
+        readonly Stream _stream;
+        readonly ZipArchive _zip;
+
+        public ArchivePackageReader(string path)
+            : this(File.Open(path, FileMode.Open, FileAccess.Read))
+        {
+        }
+
+        // Takes ownership of the stream (used for nested .zip entries buffered into a MemoryStream).
+        public ArchivePackageReader(Stream stream)
+        {
+            _stream = stream;
+            _zip = new ZipArchive(stream, ZipArchiveMode.Read);
+        }
+
+        // Directory entries have an empty Name and no content of their own; skip them.
+        public IEnumerable<IPackageEntry> Entries =>
+            _zip.Entries.Where(e => e.Name.Length != 0).Select(e => (IPackageEntry)new Entry(e));
+
+        public IPackageEntry? Find(Func<string, bool> pathPredicate) =>
+            _zip.Entries.Where(e => e.Name.Length != 0)
+                .Select(e => (IPackageEntry)new Entry(e))
+                .FirstOrDefault(e => pathPredicate(e.FullPath));
+
+        public void Dispose()
+        {
+            _zip.Dispose();
+            _stream.Dispose();
+        }
+
+        sealed class Entry(ZipArchiveEntry entry) : IPackageEntry
+        {
+            public string FullPath => entry.FullName;
+            public Stream Open() => entry.Open();
+        }
+    }
+
+    sealed class DirectoryPackageReader : IPackageReader
+    {
+        readonly AbsolutePath _directory;
+
+        public DirectoryPackageReader(AbsolutePath directory) => _directory = directory;
+
+        public IEnumerable<IPackageEntry> Entries =>
+            _directory.GlobFiles("**/*").Select(f => (IPackageEntry)new Entry(_directory, f));
+
+        public IPackageEntry? Find(Func<string, bool> pathPredicate) =>
+            Entries.FirstOrDefault(e => pathPredicate(e.FullPath));
+
+        public void Dispose()
+        {
+        }
+
+        sealed class Entry(AbsolutePath root, AbsolutePath file) : IPackageEntry
+        {
+            // Normalise to '/' so predicates/prefixes match the archive backend regardless of OS.
+            public string FullPath => Path.GetRelativePath(root, file).Replace('\\', '/');
+            public Stream Open() => File.OpenRead(file);
+        }
+    }
 }
