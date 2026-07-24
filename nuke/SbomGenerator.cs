@@ -1010,6 +1010,11 @@ public static class SbomGenerator
         var id = identity.Attribute("Id")?.Value ?? "";
         var version = identity.Attribute("Version")?.Value ?? "";
 
+        // Optional metadata may be present but blank (e.g. <License />); treat that as absent so the
+        // SBOM doesn't carry a meaningless empty licence name, external-reference URL or description
+        // (an empty LicenseFile is not null, so it would otherwise reach Path.GetFileName("") = "").
+        static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
         return new PackageMetadata
         {
             Id = id,
@@ -1017,11 +1022,12 @@ public static class SbomGenerator
             ComponentType = "application",
             // No registered purl type for a VSIX; pkg:generic is CycloneDX's documented fallback.
             Purl = $"pkg:generic/{id}@{version}",
-            Authors = identity.Attribute("Publisher")?.Value,
+            Authors = NullIfBlank(identity.Attribute("Publisher")?.Value),
             // <License> is a path to a licence file bundled in the VSIX, like a nuspec type="file".
-            LicenseFile = Child(metadata, "License")?.Value?.Trim(),
-            Description = (Child(metadata, "Description")?.Value ?? Child(metadata, "DisplayName")?.Value)?.Trim(),
-            ProjectUrl = Child(metadata, "MoreInfo")?.Value?.Trim(),
+            LicenseFile = NullIfBlank(Child(metadata, "License")?.Value),
+            Description = NullIfBlank(Child(metadata, "Description")?.Value)
+                ?? NullIfBlank(Child(metadata, "DisplayName")?.Value),
+            ProjectUrl = NullIfBlank(Child(metadata, "MoreInfo")?.Value),
         };
     }
 
