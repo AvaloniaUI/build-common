@@ -28,6 +28,10 @@ namespace NukeExtensions;
 // repositories that consume build-common. A repository that merges several projects' packed
 // output into one shipped package should call GenerateForPackage directly with the full list
 // of constituent projects, so the merged-away projects' dependencies still appear in the SBOM.
+//
+// GenerateForVsix does the same for a Visual Studio extension (.vsix), which is also an OPC
+// package: the constituent scan, shipped-binary content check and embed machinery are shared,
+// and only the manifest it reads (extension.vsixmanifest vs .nuspec) differs.
 public static class SbomGenerator
 {
     // The version parameter is optional: builds whose nuke script computes the package version
@@ -80,6 +84,76 @@ public static class SbomGenerator
         IReadOnlyList<string>? projectSearchDirs = null,
         IReadOnlyList<string>? additionalProductNames = null,
         AbsolutePath? baseIntermediateOutputPath = null)
+    {
+        var scan = ScanConstituentProjects(cycloneDx, rootDirectory, outputDirectory, version, packageId,
+            constituentProjectIds, projectSearchDirs, baseIntermediateOutputPath);
+        if (scan is null)
+        {
+            Warning($"SBOM: no source projects could be scanned for '{packageId}', no SBOM was generated for it.");
+            return;
+        }
+
+        // The final .nupkg carries the authoritative publisher/license/repository metadata and the
+        // actual shipped binaries; use it to flesh out the thin root component cyclonedx-dotnet
+        // emits and to verify nothing ships that the dependency scan didn't already account for.
+        PackageMetadata? meta = null;
+        if (packagePath is not null)
+            meta = ReadNuspecMetadata((string)packagePath);
+        else
+            Warning($"SBOM: couldn't find the built .nupkg for '{packageId}' - root metadata and package-content verification were skipped.");
+
+        FinalizeAndEmit(scan.Value, meta, packagePath, outputDirectory, version, packageId,
+            constituentProjectIds, additionalProductNames);
+    }
+
+    // Generates the SBOM for a Visual Studio extension (.vsix) and embeds it at the same
+    // _manifest/cyclonedx/bom.cdx.json path used for .nupkgs. A VSIX is an OPC package like a
+    // .nupkg, so the shipped-binary scan and the embed/content-type machinery are shared; the only
+    // real differences are that its authoritative metadata lives in extension.vsixmanifest rather
+    // than a .nuspec (there's no packed .nuspec inside a VSIX), and its root component is an
+    // application rather than a library. Id and version are read from the manifest - they are what
+    // was actually built into the shipped VSIX - so callers supply only the constituent projects.
+    //
+    // Because a VSIX IL-merges/bundles many projects into one deliverable, constituentProjectIds
+    // must list every source project whose packed output ends up inside it, exactly as for a merged
+    // .nupkg, so the merged-away projects' dependencies still appear in the SBOM. The primary
+    // extension assembly is one of those constituents (the root component is the VSIX bundle, not
+    // any single assembly), so it is recorded as a bundled component rather than as the root.
+    public static void GenerateForVsix(Tool cycloneDx, AbsolutePath rootDirectory, AbsolutePath vsixPath,
+        AbsolutePath outputDirectory, IReadOnlyList<string> constituentProjectIds,
+        IReadOnlyList<string>? projectSearchDirs = null,
+        IReadOnlyList<string>? additionalProductNames = null,
+        AbsolutePath? baseIntermediateOutputPath = null)
+    {
+        var meta = ReadVsixManifestMetadata((string)vsixPath);
+        var packageId = meta.Id;
+        var version = meta.Version;
+
+        var scan = ScanConstituentProjects(cycloneDx, rootDirectory, outputDirectory, version, packageId,
+            constituentProjectIds, projectSearchDirs, baseIntermediateOutputPath);
+        if (scan is null)
+        {
+            Warning($"SBOM: no source projects could be scanned for '{packageId}', no SBOM was generated for it.");
+            return;
+        }
+
+        FinalizeAndEmit(scan.Value, meta, vsixPath, outputDirectory, version, packageId,
+            constituentProjectIds, additionalProductNames);
+    }
+
+    // The merged CycloneDX document from scanning every constituent project, along with the
+    // dedup/graph state the finalize phase needs to keep extending it consistently.
+    readonly record struct ConstituentScan(
+        JsonObject Merged, HashSet<string> SeenComponentKeys, List<AbsolutePath> ScannedProjectDirs);
+
+    // Runs cyclonedx-dotnet over each constituent project against the already-restored solution and
+    // merges the results into one document whose single root component is shared by every
+    // constituent (via -sn/-sv). Package-format agnostic: it only reads source projects, so it's
+    // identical for a .nupkg and a .vsix. Returns null if not one constituent could be located.
+    static ConstituentScan? ScanConstituentProjects(Tool cycloneDx, AbsolutePath rootDirectory,
+        AbsolutePath outputDirectory, string version, string packageId,
+        IReadOnlyList<string> constituentProjectIds, IReadOnlyList<string>? projectSearchDirs,
+        AbsolutePath? baseIntermediateOutputPath)
     {
         JsonObject? merged = null;
         var seenComponentKeys = new HashSet<string>();
@@ -139,36 +213,37 @@ public static class SbomGenerator
             }
         }
 
-        if (merged is null)
-        {
-            Warning($"SBOM: no source projects could be scanned for '{packageId}', no SBOM was generated for it.");
-            return;
-        }
+        return merged is null ? null : new ConstituentScan(merged, seenComponentKeys, scannedProjectDirs);
+    }
+
+    // Enriches the scanned dependency graph with everything only the shipped package can tell us -
+    // bundled webapp dependencies, authoritative root metadata, declared package dependencies and
+    // the actual shipped binaries - then writes the standalone SBOM and embeds a copy in the
+    // package. Shared by the .nupkg and .vsix paths; the only per-format input is `meta` (read from
+    // a .nuspec or an extension.vsixmanifest) and the package itself.
+    static void FinalizeAndEmit(ConstituentScan scan, PackageMetadata? meta, AbsolutePath? packagePath,
+        AbsolutePath outputDirectory, string version, string packageId,
+        IReadOnlyList<string> constituentProjectIds, IReadOnlyList<string>? additionalProductNames)
+    {
+        var merged = scan.Merged;
+        var seenComponentKeys = scan.SeenComponentKeys;
 
         // cyclonedx-dotnet only sees the MSBuild/NuGet graph. Some projects also bundle a
         // Bun/npm-built webapp directly into their published package - scan those separately
         // so their shipped JS dependencies aren't silently absent from the SBOM.
         var rootRef = merged["metadata"]?["component"]?["bom-ref"]?.GetValue<string>();
-        foreach (var projectDir in scannedProjectDirs)
+        foreach (var projectDir in scan.ScannedProjectDirs)
             AddNpmComponents(merged, seenComponentKeys, projectDir, rootRef);
 
-        // The final .nupkg carries the authoritative publisher/license/repository metadata and the
-        // actual shipped binaries; use it to flesh out the thin root component cyclonedx-dotnet
-        // emits and to verify nothing ships that the dependency scan didn't already account for.
-        if (packagePath is not null)
+        if (meta is not null && packagePath is not null)
         {
-            var nuspec = ReadNuspecMetadata((string)packagePath);
-            EnrichRootComponent(merged, nuspec);
-            AddNuspecDependencyComponents(merged, seenComponentKeys, nuspec, rootRef);
+            EnrichRootComponent(merged, meta);
+            AddDeclaredDependencyComponents(merged, seenComponentKeys, meta, rootRef);
             var productNames = additionalProductNames is null
                 ? constituentProjectIds
                 : constituentProjectIds.Concat(additionalProductNames).ToList();
             AddPackageContentComponents(merged, seenComponentKeys, (string)packagePath, packageId,
-                productNames, nuspec);
-        }
-        else
-        {
-            Warning($"SBOM: couldn't find the built .nupkg for '{packageId}' - root metadata and package-content verification were skipped.");
+                productNames, meta);
         }
 
         // cyclonedx-dotnet leaves dependsOn edges pointing at packages it excluded as dev
@@ -180,8 +255,8 @@ public static class SbomGenerator
         var sbomJson = merged.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(outputDirectory / $"{packageId}.{version}.cdx.json", sbomJson);
 
-        // Embed the SBOM inside the shipped .nupkg so it travels with the package, in addition to
-        // the standalone copy written above (which CI publishes as the SBOM artifact) - belt and
+        // Embed the SBOM inside the shipped package so it travels with it, in addition to the
+        // standalone copy written above (which CI publishes as the SBOM artifact) - belt and
         // suspenders: consumers who only ever see the package still get its bill of materials.
         if (packagePath is not null)
             EmbedSbomInPackage(packagePath, sbomJson);
@@ -193,17 +268,23 @@ public static class SbomGenerator
     const string EmbeddedSbomEntryPath = "_manifest/cyclonedx/bom.cdx.json";
 
     // Adds the generated SBOM as a new part inside the shipped package. Must run before the package
-    // is signed - a NuGet signature covers the whole archive, so adding a part afterwards would
-    // invalidate it. That holds here: these packages are signed server-side by nuget.org on push,
-    // which happens after this build step.
-    static void EmbedSbomInPackage(AbsolutePath nupkgPath, string sbomJson)
+    // is signed - a signature covers the whole archive, so adding a part afterwards would invalidate
+    // it. That holds here: .nupkgs are signed server-side by nuget.org on push, and a .vsix has its
+    // SBOM embedded during the merge/obfuscate repack, before any signing step - both after this.
+    static void EmbedSbomInPackage(AbsolutePath packagePath, string sbomJson)
     {
-        using var file = File.Open(nupkgPath, FileMode.Open, FileAccess.ReadWrite);
+        using var file = File.Open(packagePath, FileMode.Open, FileAccess.ReadWrite);
         using var zip = new ZipArchive(file, ZipArchiveMode.Update);
 
-        if (zip.Entries.Any(e => e.FullName.EndsWith(".signature.p7s", StringComparison.OrdinalIgnoreCase)))
+        // A NuGet signature is a .signature.p7s part; an OPC/VSIX signature lives under
+        // package/services/digital-signature/. Either means the archive is already signed, so
+        // adding a part now would break that signature - leave it alone.
+        var isSigned = zip.Entries.Any(e =>
+            e.FullName.EndsWith(".signature.p7s", StringComparison.OrdinalIgnoreCase)
+            || e.FullName.StartsWith("package/services/digital-signature/", StringComparison.OrdinalIgnoreCase));
+        if (isSigned)
         {
-            Warning($"SBOM: '{nupkgPath.Name}' is already signed - skipping embed so its signature stays valid.");
+            Warning($"SBOM: '{packagePath.Name}' is already signed - skipping embed so its signature stays valid.");
             return;
         }
 
@@ -504,28 +585,30 @@ public static class SbomGenerator
             : Guid.NewGuid().ToString());
 
     // Fills in the root component with the publisher, licence, description and repository details
-    // from the shipped .nuspec - cyclonedx-dotnet only emits type/name/version, which is far short
-    // of the manufacturer/provenance information a CRA-facing SBOM is expected to carry.
-    static void EnrichRootComponent(JsonObject merged, NuspecMetadata meta)
+    // from the shipped package's manifest (.nuspec or extension.vsixmanifest) - cyclonedx-dotnet
+    // only emits type/name/version, which is far short of the manufacturer/provenance information a
+    // CRA-facing SBOM is expected to carry.
+    static void EnrichRootComponent(JsonObject merged, PackageMetadata meta)
     {
         var component = merged["metadata"]?["component"]?.AsObject();
         if (component is null)
             return;
 
-        // These are shipped libraries, not applications (cyclonedx-dotnet's default type).
-        component["type"] = "library";
-        // The .nuspec is authoritative for the shipped version. A build-supplied version that
+        // Libraries (.nupkg) vs application/extension (.vsix); cyclonedx-dotnet's default is
+        // "application" regardless, so the manifest decides.
+        component["type"] = meta.ComponentType;
+        // The manifest is authoritative for the shipped version. A build-supplied version that
         // disagrees means the packages predate the current restore, so the dependency data just
         // scanned may not describe what's actually inside them - fail rather than record it as
         // CRA evidence. Can't trigger in normal flows: builds pass the same version to pack and
-        // to the SBOM scan within one run, and the version-less Generate overload reads the
-        // version from the nuspec itself.
+        // to the SBOM scan within one run, and the .vsix/version-less .nupkg paths read the
+        // version from the manifest itself.
         var scannedVersion = component["version"]?.GetValue<string>();
         if (scannedVersion is not null && scannedVersion != meta.Version)
             throw new InvalidOperationException(
                 $"SBOM: '{meta.Id}' was scanned as version '{scannedVersion}' but the shipped package is '{meta.Version}' - are the packages stale?");
         component["version"] = meta.Version;
-        component["purl"] = $"pkg:nuget/{meta.Id}@{meta.Version}";
+        component["purl"] = meta.Purl;
         if (meta.Description is not null)
             component["description"] = meta.Description;
         if (meta.Copyright is not null)
@@ -563,14 +646,16 @@ public static class SbomGenerator
             metadata["supplier"] = supplier.DeepClone();
     }
 
-    // Cross-checks the SBOM against the shipped .nuspec's <dependencies>: everything declared
-    // there is restored on the consumer's machine, so it's part of the delivered dependency graph
-    // by definition. cyclonedx-dotnet's -ed flag drops packages referenced with PrivateAssets as
-    // dev dependencies, but PrivateAssets only controls which *assets* flow to consumers - a
-    // dependency that still appears in the nuspec (e.g. one kept for its buildTransitive targets,
-    // like AvaloniaUI.Licensing) is delivered regardless, so re-add any the scan excluded.
-    static void AddNuspecDependencyComponents(JsonObject merged, HashSet<string> seenComponentKeys,
-        NuspecMetadata meta, string? rootRef)
+    // Cross-checks the SBOM against the shipped package's declared <dependencies>: everything
+    // declared there is restored on the consumer's machine, so it's part of the delivered
+    // dependency graph by definition. cyclonedx-dotnet's -ed flag drops packages referenced with
+    // PrivateAssets as dev dependencies, but PrivateAssets only controls which *assets* flow to
+    // consumers - a dependency that still appears in the nuspec (e.g. one kept for its
+    // buildTransitive targets, like AvaloniaUI.Licensing) is delivered regardless, so re-add any
+    // the scan excluded. A VSIX declares no such dependencies (meta.Dependencies is empty), so this
+    // is a no-op for it - everything it delivers is already accounted for by the content scan.
+    static void AddDeclaredDependencyComponents(JsonObject merged, HashSet<string> seenComponentKeys,
+        PackageMetadata meta, string? rootRef)
     {
         var target = merged["components"]?.AsArray() ?? (JsonArray)(merged["components"] = new JsonArray());
         var representedNames = target
@@ -613,7 +698,7 @@ public static class SbomGenerator
     // not imply a dependency. They stay flat top-level components (not nested subcomponents) so their
     // per-assembly hashes remain visible to scanners that ignore nested components.
     static void AddPackageContentComponents(JsonObject merged, HashSet<string> seenComponentKeys,
-        string nupkgPath, string packageId, IReadOnlyList<string> firstPartyNames, NuspecMetadata meta)
+        string nupkgPath, string packageId, IReadOnlyList<string> firstPartyNames, PackageMetadata meta)
     {
         var productNames = new HashSet<string>(firstPartyNames, StringComparer.OrdinalIgnoreCase) { packageId };
         var representedNames = (merged["components"]?.AsArray() ?? new JsonArray())
@@ -831,10 +916,17 @@ public static class SbomGenerator
         }
     }
 
-    class NuspecMetadata
+    // The subset of a shipped package's manifest the SBOM cares about, read from either a .nuspec
+    // (ReadNuspecMetadata) or an extension.vsixmanifest (ReadVsixManifestMetadata).
+    class PackageMetadata
     {
         public string Id = "";
         public string Version = "";
+        // CycloneDX root-component type: "library" for a .nupkg, "application" for a .vsix.
+        public string ComponentType = "library";
+        // The root component's purl. Nuget packages have a pkg:nuget purl; a VSIX has no registered
+        // purl type, so it falls back to pkg:generic.
+        public string Purl = "";
         public string? Authors;
         public string? LicenseId;
         public string? LicenseExpression;
@@ -846,7 +938,7 @@ public static class SbomGenerator
         public List<(string Id, string Version)> Dependencies = new();
     }
 
-    static NuspecMetadata ReadNuspecMetadata(string nupkgPath)
+    static PackageMetadata ReadNuspecMetadata(string nupkgPath)
     {
         using var file = File.Open(nupkgPath, FileMode.Open, FileAccess.Read);
         using var zip = new ZipArchive(file, ZipArchiveMode.Read);
@@ -861,10 +953,14 @@ public static class SbomGenerator
         var license = metadata.Elements().FirstOrDefault(x => x.Name.LocalName == "license");
         var repository = metadata.Elements().FirstOrDefault(x => x.Name.LocalName == "repository");
 
-        return new NuspecMetadata
+        var id = Value("id") ?? "";
+        var version = Value("version") ?? "";
+        return new PackageMetadata
         {
-            Id = Value("id") ?? "",
-            Version = Value("version") ?? "",
+            Id = id,
+            Version = version,
+            ComponentType = "library",
+            Purl = $"pkg:nuget/{id}@{version}",
             Authors = Value("authors"),
             // A nuspec <license> is either type="expression" (an SPDX expression) or type="file"
             // (a path to a bundled licence file); only the former is a valid SPDX id/expression.
@@ -883,6 +979,49 @@ public static class SbomGenerator
                 .Select(d => (d.Id!, d.Version!))
                 .Distinct()
                 .ToList() ?? new()
+        };
+    }
+
+    // Reads the shipped VSIX's extension.vsixmanifest. Unlike a .nuspec this carries no dependency
+    // list (a VSIX bundles everything it needs) and no repository/copyright fields, so those stay
+    // empty; Id/Version/Publisher/License/description come from the <Metadata> block. Parsed by
+    // LocalName so the vsx-schema namespace version doesn't matter.
+    static PackageMetadata ReadVsixManifestMetadata(string vsixPath)
+    {
+        using var file = File.Open(vsixPath, FileMode.Open, FileAccess.Read);
+        using var zip = new ZipArchive(file, ZipArchiveMode.Read);
+        var manifestEntry = zip.Entries.FirstOrDefault(e =>
+            e.FullName.Equals("extension.vsixmanifest", StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException(
+                $"SBOM: '{Path.GetFileName(vsixPath)}' has no extension.vsixmanifest - is it a valid VSIX?");
+        using var stream = manifestEntry.Open();
+        var root = XDocument.Load(stream).Root!;
+
+        XElement? Child(XElement parent, string name) =>
+            parent.Elements().FirstOrDefault(x => x.Name.LocalName == name);
+
+        var metadata = Child(root, "Metadata")
+            ?? throw new InvalidOperationException(
+                $"SBOM: '{Path.GetFileName(vsixPath)}' vsixmanifest has no <Metadata> element.");
+        var identity = Child(metadata, "Identity")
+            ?? throw new InvalidOperationException(
+                $"SBOM: '{Path.GetFileName(vsixPath)}' vsixmanifest has no <Identity> element.");
+
+        var id = identity.Attribute("Id")?.Value ?? "";
+        var version = identity.Attribute("Version")?.Value ?? "";
+
+        return new PackageMetadata
+        {
+            Id = id,
+            Version = version,
+            ComponentType = "application",
+            // No registered purl type for a VSIX; pkg:generic is CycloneDX's documented fallback.
+            Purl = $"pkg:generic/{id}@{version}",
+            Authors = identity.Attribute("Publisher")?.Value,
+            // <License> is a path to a licence file bundled in the VSIX, like a nuspec type="file".
+            LicenseFile = Child(metadata, "License")?.Value?.Trim(),
+            Description = (Child(metadata, "Description")?.Value ?? Child(metadata, "DisplayName")?.Value)?.Trim(),
+            ProjectUrl = Child(metadata, "MoreInfo")?.Value?.Trim(),
         };
     }
 
