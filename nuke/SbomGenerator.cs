@@ -698,7 +698,7 @@ public static class SbomGenerator
     // not imply a dependency. They stay flat top-level components (not nested subcomponents) so their
     // per-assembly hashes remain visible to scanners that ignore nested components.
     static void AddPackageContentComponents(JsonObject merged, HashSet<string> seenComponentKeys,
-        string nupkgPath, string packageId, IReadOnlyList<string> firstPartyNames, PackageMetadata meta)
+        string packagePath, string packageId, IReadOnlyList<string> firstPartyNames, PackageMetadata meta)
     {
         var productNames = new HashSet<string>(firstPartyNames, StringComparer.OrdinalIgnoreCase) { packageId };
         var representedNames = (merged["components"]?.AsArray() ?? new JsonArray())
@@ -720,7 +720,7 @@ public static class SbomGenerator
         // bom-refs of every shipped binary added below; declared as a complete assembly at the end.
         var assemblyRefs = new List<string>();
 
-        using var file = File.Open(nupkgPath, FileMode.Open, FileAccess.Read);
+        using var file = File.Open(packagePath, FileMode.Open, FileAccess.Read);
         using var zip = new ZipArchive(file, ZipArchiveMode.Read);
         foreach (var (path, bytes) in EnumerateShippedBinaries(zip))
         {
