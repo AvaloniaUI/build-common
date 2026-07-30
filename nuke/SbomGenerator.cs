@@ -344,7 +344,7 @@ public static class SbomGenerator
         embed?.Invoke(sbomJson);
     }
 
-    // The path inside the .nupkg where the CycloneDX SBOM is embedded. Mirrors the _manifest/
+    // The path inside the package (.nupkg/.vsix) where the CycloneDX SBOM is embedded. Mirrors the _manifest/
     // layout Microsoft.Sbom.Targets uses for its SPDX manifest, but keeps CycloneDX's recognised
     // *.cdx.json filename so tools that scan for that pattern still find it once unpacked.
     const string EmbeddedSbomEntryPath = "_manifest/cyclonedx/bom.cdx.json";
