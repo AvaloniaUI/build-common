@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net8.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <IsPackable>false</IsPackable>
+        <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+        <RootNamespace>SourceRelease</RootNamespace>
+        <!-- NUKE injects [Parameter] fields via reflection, so they read as unassigned. -->
+        <NoWarn>$(NoWarn);CS0649;CS8618</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Nuke.Common" Version="9.0.4" />
+    </ItemGroup>
+
+</Project>
