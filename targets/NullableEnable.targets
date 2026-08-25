@@ -1,11 +1,10 @@
 <Project>
     <!--
-      The Nullable annotations on netstandard2.0 are incomplete and incorrect in places. Ignore
-      nullable warnings before .NET 6 and make them errors on later target frameworks.
+      Nullable annotations are incomplete for netstandard2.0. By default, this file suppresses
+      nullable warnings for targets before .NET 6. It treats the warnings as errors for newer targets.
 
-      Set SuppressNullableWarnings=false in pre-net6.0 projects to keep nullable warnings enabled.
-      Set DisableNullableErrors=true in net6.0+ projects to keep nullable warnings as warnings
-      instead of errors.
+      Set SuppressNullableWarnings=false to enable warnings for targets before .NET 6.
+      Set DisableNullableErrors=true to keep the warnings for newer targets as warnings.
     -->
     <PropertyGroup Condition="'$(Nullable)' == ''">
         <Nullable>enable</Nullable>

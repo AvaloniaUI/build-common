@@ -17,17 +17,14 @@ public static class VersionResolver
 
     public static NuGetVersion GetVersion(Version baseVersionNumber, bool isPackingToLocalCache, string? refName, string? runNumber)
     {
-        // Release tag
         if (NuGetVersion.TryParse(refName, out var tagVersion))
         {
             return tagVersion;
         }
-        // Release branch
         else if (NuGetVersion.TryParse(refName?.Replace("release/", "") ?? "", out var releaseVersion))
         {
             return releaseVersion;
         }
-        // CI build number
         else if (int.TryParse(runNumber, out var ciRun))
         {
             return NuGetVersion.Parse(

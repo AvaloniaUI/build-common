@@ -65,8 +65,6 @@ runs:
         path: ${{ github.workspace }}/${{ inputs.output_path }}/${{ inputs.artifact_glob }}
         retention-days: ${{ inputs.artifact_retention_days }}
 
-    # Standalone copy of the per-package SBOMs that CreateSbom also embeds into each .nupkg.
-    # Repositories whose nuke build doesn't generate SBOMs yet simply skip this step.
     - name: Upload SBOM artifacts
       uses: actions/upload-artifact@v4
       with:
