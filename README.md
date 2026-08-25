@@ -55,8 +55,7 @@ concurrency:
     cancel-in-progress: false
 
 jobs:
-    # Derive the version (and whether to upload) from whichever trigger fired. A
-    # release/* branch push and a published release always upload.
+    # Release branches and published releases always upload.
     setup:
         runs-on: ubuntu-latest
         outputs:
@@ -77,23 +76,19 @@ jobs:
 
     source-release:
         needs: setup
-        # Pin to a specific commit SHA (not a branch or tag) — any move of
-        # @main would otherwise immediately affect every consumer. Look up
-        # the latest source-release SHA from this repo's commit history and
-        # bump intentionally. Dependabot's `github-actions` ecosystem can
-        # automate this.
+        # Pin this workflow to a commit SHA. Dependabot can update the SHA.
         uses: AvaloniaUI/build-common/.github/workflows/source-release.yml@<sha>
         with:
             project_name: Avalonia.Controls.Example
-            ref: ${{ inputs.ref }}                               # empty outside workflow_dispatch
+            ref: ${{ inputs.ref }}                               # Empty for other triggers.
             version: ${{ needs.setup.outputs.version }}
             upload: ${{ needs.setup.outputs.upload == 'true' }}
             release_manager_base_url: ${{ vars.RELEASE_MANAGER_BASE_URL }}
             release_manager_product: ${{ vars.RELEASE_MANAGER_PRODUCT_NAME }}
-            # allow_list: .github/source-release/projects.txt    # default
-            # solution_file: Avalonia.Controls.Example.slnx       # required only if multiple .slnx exist at the repo root
+            # allow_list: .github/source-release/projects.txt
+            # solution_file: Avalonia.Controls.Example.slnx       # Required only with multiple root .slnx files.
         secrets:
-            checkout_token: ${{ secrets.SUBMODULE_TOKEN }}     # optional, only for private submodules
+            checkout_token: ${{ secrets.SUBMODULE_TOKEN }}     # Required only for private submodules.
             license_key: ${{ secrets.ACCELERATE_LICENSE_KEY }}
             release_manager_api_key: ${{ secrets.RELEASE_MANAGER_API_KEY }}
 ```
@@ -135,13 +130,13 @@ upload job always runs on `ubuntu-latest`.
             project_name: Avalonia.Controls.Example
             version: ${{ needs.setup.outputs.version }}
             upload: ${{ needs.setup.outputs.upload == 'true' }}
-            runs_on: macos-latest          # mobile TFMs need a macOS agent
+            runs_on: macos-latest          # Mobile TFMs need a macOS agent.
             install_workloads: android ios
             dotnet_sdk: 10.0.102
             release_manager_base_url: ${{ vars.RELEASE_MANAGER_BASE_URL }}
             release_manager_product: ${{ vars.RELEASE_MANAGER_PRODUCT_NAME }}
         secrets:
-            checkout_token: ${{ secrets.SUBMODULE_TOKEN }}     # optional, only for private submodules
+            checkout_token: ${{ secrets.SUBMODULE_TOKEN }}     # Required only for private submodules.
             license_key: ${{ secrets.ACCELERATE_LICENSE_KEY }}
             release_manager_api_key: ${{ secrets.RELEASE_MANAGER_API_KEY }}
 ```

@@ -1,17 +1,6 @@
 name: Source Release
 
-# Reusable workflow that packages and ships a customer-facing source zip as part of
-# a release. Callers invoke it on a push to a release/* branch, deriving the version
-# from the branch name and passing it as `version`, so the source zip ships alongside
-# the rest of the release. Driven by an allow-list of customer-facing csproj paths
-# in the caller repo; uses the scripts/source-release NUKE build from build-common
-# (consumed via the caller's submodule pin) to enumerate source files via
-# MSBuild and stage them, then scans, zips, verifies the zip builds, and
-# optionally uploads it to Release Manager as a `generic` artifact
-# (PUT /api/upload/<product>/<version>/generic/<filename>).
-#
-# Callers must check out build-common (typically as a submodule at the
-# repository root) at a SHA that includes scripts/source-release.
+# Callers must check out build-common at a SHA that includes scripts/source-release.
 
 on:
     workflow_call:
@@ -239,10 +228,7 @@ jobs:
                       fail=1
                   fi
 
-                  # nuget.config files should never be in the staged tree — they
-                  # aren't in any csproj item list and aren't imported as MSBuild
-                  # files, so the MSBuild-driven stage won't include them. Presence
-                  # here would mean the stage script regressed.
+                  # nuget.config must never enter the staged source.
                   nuget_files=$(find "$staging_dir" -type f -iname 'nuget.config' || true)
                   if [[ -n "$nuget_files" ]]; then
                       echo "::error::nuget.config file(s) leaked into staging directory:"
@@ -250,7 +236,7 @@ jobs:
                       fail=1
                   fi
 
-                  # Belt-and-braces: any package-source-credential markers anywhere.
+                  # Scan for package-source-credential markers.
                   matches=$(grep -IRnE \
                       -e '<packageSourceCredentials' \
                       -e 'ClearTextPassword' \
@@ -368,15 +354,9 @@ jobs:
                   set -euo pipefail
                   zip_path="${RUNNER_TEMP}/zip/${ZIP_NAME}"
                   base_url="${RM_BASE_URL%/}"
-                  # The generic-artifact *filename* is Release Manager's stable
-                  # identifier for the artifact within a product, so it is the
-                  # fixed literal `source.zip` — version-independent (the version
-                  # already lives in the URL path) and the same across every repo.
-                  # A versioned or per-project filename would register a brand-new
-                  # artifact identity for every release. Upload the (versioned)
-                  # zip on disk under this version-independent name.
+                  # Release Manager uses the filename as a stable artifact ID.
+                  # The URL already contains the version.
                   artifact_name="source.zip"
-                  # PUT <base>/api/upload/<product>/<version>/generic/<filename>  (web-api §13.2)
                   upload_url="${base_url}/api/upload/${RM_PRODUCT}/${VERSION}/generic/${artifact_name}"
 
                   echo "Uploading ${ZIP_NAME} as ${artifact_name} (version ${VERSION}) to ${upload_url}"
@@ -390,7 +370,7 @@ jobs:
                   echo "Release Manager responded HTTP ${http_code}"
                   cat "${RUNNER_TEMP}/rm_response.json" 2>/dev/null || true
                   echo
-                  # 201 Created on first upload, 200 OK on overwrite.
+                  # The first upload returns 201. An overwrite returns 200.
                   if [[ "$http_code" != "200" && "$http_code" != "201" ]]; then
                       echo "::error::Release Manager upload failed with HTTP ${http_code}." >&2
                       exit 1

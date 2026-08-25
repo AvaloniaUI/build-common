@@ -15,12 +15,10 @@ namespace NukeExtensions;
 public class NugetCache
 {
     /// <summary>
-    /// Installs a library to the local NuGet cache.
-    /// This is useful for testing packages without having to push them to a remote source.
-    /// .NET SDK treats them as installed and available from any project.
+    /// Installs packages in the local NuGet cache for tests.
     /// </summary>
-    /// <param name="packageFiles">Collection of Nupkg files to install to the cache.</param>
-    /// <param name="rootDirectory">Root directory to load nuget settings from.</param>
+    /// <param name="packageFiles">The .nupkg files to install.</param>
+    /// <param name="rootDirectory">The directory for the NuGet configuration.</param>
     public static void InstallLibraryToNuGetCache(
         IReadOnlyCollection<AbsolutePath> packageFiles,
         string rootDirectory,
@@ -71,7 +69,7 @@ public class NugetCache
         }
         catch
         {
-            // Ignore
+            // The tool can be absent.
         }
 
         DotNetTasks.DotNetToolInstall(c => c
