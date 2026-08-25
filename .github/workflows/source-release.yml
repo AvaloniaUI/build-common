@@ -236,7 +236,7 @@ jobs:
                       fail=1
                   fi
 
-                  # Scan for NuGet credential markers.
+                  # Scan for package-source-credential markers.
                   matches=$(grep -IRnE \
                       -e '<packageSourceCredentials' \
                       -e 'ClearTextPassword' \
