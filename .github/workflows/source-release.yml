@@ -93,6 +93,15 @@ on:
                 required: false
                 type: string
                 default: ubuntu-latest
+            free_disk_space:
+                description: >-
+                    Whether to delete the runner's unused preinstalled toolchains before
+                    building. On by default because the failure without it is opaque: the
+                    runner process itself dies writing its own log, so the job reports a
+                    failure with nothing to read. Set false if the build needs one of them.
+                required: false
+                type: boolean
+                default: true
             install_workloads:
                 description: >-
                     Space-separated .NET workloads to install before staging and
@@ -274,20 +283,35 @@ jobs:
         needs: package
         runs-on: ${{ inputs.runs_on }}
         steps:
-            # Building a whole solution costs far more disk than the zip suggests: every test and
-            # sample output takes its own copy of the native runtime assets (SkiaSharp and
+            # Building a whole solution costs far more disk than the zip suggests: every test
+            # and sample output takes its own copy of the native runtime assets (SkiaSharp and
             # HarfBuzz for every RID), which for a mid-sized library runs to gigabytes per
-            # project once multiplied across target frameworks. A Linux runner does not have
-            # room for that beside its preinstalled toolchains, and the build dies partway with
-            # "No space left on device" rather than anything to do with the source.
+            # project once multiplied across target frameworks. A Linux runner has no room for
+            # that beside its preinstalled toolchains, and the build dies partway with "No space
+            # left on device" while naming an unrelated file copy.
             #
-            # This runs before Setup .NET on purpose: on Linux the SDK lives in /usr/share/dotnet,
-            # so deleting it afterwards would remove the SDK the job just installed.
+            # Before Setup .NET on purpose: on Linux the SDK lives in /usr/share/dotnet, so
+            # deleting it afterwards would remove the SDK the job just installed.
             - name: Free disk space
-              if: ${{ runner.os == 'Linux' }}
+              if: ${{ inputs.free_disk_space && runner.os == 'Linux' }}
               shell: bash
+              env:
+                  INSTALL_WORKLOADS: ${{ inputs.install_workloads }}
               run: |
-                  sudo rm -rf                       /usr/share/dotnet /usr/local/lib/android /opt/ghc                       /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup                       /usr/lib/jvm || true
+                  set -uo pipefail
+
+                  # Reinstalled by Setup .NET immediately after this step.
+                  sudo rm -rf /usr/share/dotnet || true
+
+                  # Languages and shells no .NET build uses.
+                  sudo rm -rf /opt/ghc /usr/local/.ghcup /usr/share/swift /usr/local/share/powershell || true
+
+                  # The Android SDK and the JDKs are only dead weight when no workload wants
+                  # them: `dotnet workload install android` needs both to build afterwards.
+                  if [[ -z "$INSTALL_WORKLOADS" ]]; then
+                      sudo rm -rf /usr/local/lib/android /usr/lib/jvm || true
+                  fi
+
                   df -h .
 
             - name: Setup .NET
