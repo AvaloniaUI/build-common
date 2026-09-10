@@ -13,6 +13,7 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Nuke.Common.IO;
 using Nuke.Common.Tooling;
+using NuGet.Versioning;
 using static Serilog.Log;
 
 namespace NukeExtensions;
@@ -177,14 +178,19 @@ public static class SbomGenerator
             scannedProjectDirs.Add(project.Parent);
 
             var tempBom = outputDirectory / $"_{projectId}.tmp.json";
-            // Tool quotes each interpolated value. A combined optional fragment becomes one invalid argument.
+            // No quotes around the interpolated values: Tool takes an ArgumentStringHandler,
+            // which already quotes whatever is interpolated into it. Quoting here as well
+            // produces ""C:\Some Dir\proj.csproj"", which the OS reads as an empty quoted
+            // string followed by a bare path, so the argument splits at the first space and
+            // the tool rejects the remainder. Only bites where a path contains a space.
+            // The optional fragment stays a separate argument for the same reason.
             if (baseIntermediateOutputPath is null)
                 cycloneDx(
-                    $"\"{project}\" -o \"{outputDirectory}\" -fn \"{tempBom.Name}\" -F Json -dpr -ed -sn \"{packageId}\" -sv \"{version}\"",
+                    $"{project} -o {outputDirectory} -fn {tempBom.Name} -F Json -dpr -ed -sn {packageId} -sv {version}",
                     workingDirectory: rootDirectory);
             else
                 cycloneDx(
-                    $"\"{project}\" -o \"{outputDirectory}\" -fn \"{tempBom.Name}\" -F Json -dpr -ed -sn \"{packageId}\" -sv \"{version}\" -biop \"{baseIntermediateOutputPath}\"",
+                    $"{project} -o {outputDirectory} -fn {tempBom.Name} -F Json -dpr -ed -sn {packageId} -sv {version} -biop {baseIntermediateOutputPath}",
                     workingDirectory: rootDirectory);
 
             var doc = JsonNode.Parse(File.ReadAllText(tempBom))!.AsObject();
@@ -594,7 +600,7 @@ public static class SbomGenerator
         component["type"] = meta.ComponentType;
         // A version mismatch means that the restored dependencies can differ from the shipped package.
         var scannedVersion = component["version"]?.GetValue<string>();
-        if (scannedVersion is not null && scannedVersion != meta.Version)
+        if (scannedVersion is not null && !IsSameVersion(scannedVersion, meta.Version))
             throw new InvalidOperationException(
                 $"SBOM: '{meta.Id}' was scanned as version '{scannedVersion}' but the shipped package is '{meta.Version}' - are the packages stale?");
         component["version"] = meta.Version;
@@ -634,6 +640,14 @@ public static class SbomGenerator
         if (supplier is not null && merged["metadata"] is JsonObject metadata)
             metadata["supplier"] = supplier.DeepClone();
     }
+
+    // NuGet pack normalizes whatever version it is handed ("12.2" ships as "12.2.0"), so the
+    // build-supplied and nuspec strings can spell the same version differently; only a semantic
+    // difference means the packages are stale. Unparseable versions keep the exact-string check.
+    static bool IsSameVersion(string scanned, string shipped) =>
+        NuGetVersion.TryParse(scanned, out var scannedVersion) && NuGetVersion.TryParse(shipped, out var shippedVersion)
+            ? scannedVersion == shippedVersion
+            : string.Equals(scanned, shipped, StringComparison.Ordinal);
 
     // The -ed option can exclude a PrivateAssets package that the .nuspec still declares.
     // Add all missing .nuspec dependencies because consumers restore them.
