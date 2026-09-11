@@ -300,8 +300,12 @@ jobs:
               run: |
                   set -uo pipefail
 
-                  # Reinstalled by Setup .NET immediately after this step.
-                  sudo rm -rf /usr/share/dotnet || true
+                  # The preinstalled .NET stays. Setup .NET adds the SDK the caller asks
+                  # for, not the image's toolset, so deleting it takes the reference and
+                  # host packs of every other target framework with it and does not bring
+                  # them back: a solution that multi-targets then fails to build an
+                  # executable for the framework it no longer has a host pack for, which
+                  # is what a test project is.
 
                   # Languages and shells no .NET build uses.
                   sudo rm -rf /opt/ghc /usr/local/.ghcup /usr/share/swift /usr/local/share/powershell || true
