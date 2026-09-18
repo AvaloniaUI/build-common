@@ -150,8 +150,13 @@ public static class SbomGenerator
             npmPackageJsons ?? Array.Empty<AbsolutePath>(), embed);
     }
 
+    // RestoredPackageFiles maps a file name to each copy in the restored packages.
     readonly record struct ConstituentScan(
-        JsonObject Merged, HashSet<string> SeenComponentKeys, List<AbsolutePath> ScannedProjectDirs);
+        JsonObject Merged, HashSet<string> SeenComponentKeys, List<AbsolutePath> ScannedProjectDirs,
+        Dictionary<string, List<RestoredPackageFile>> RestoredPackageFiles);
+
+    // A file inside a restored package, in the local package folder.
+    readonly record struct RestoredPackageFile(string PackageId, AbsolutePath Path);
 
     static ConstituentScan? ScanConstituentProjects(Tool cycloneDx, AbsolutePath rootDirectory,
         AbsolutePath outputDirectory, string version, string packageId,
@@ -161,6 +166,7 @@ public static class SbomGenerator
         JsonObject? merged = null;
         var seenComponentKeys = new HashSet<string>();
         var scannedProjectDirs = new List<AbsolutePath>();
+        var restoredPackageFiles = new Dictionary<string, List<RestoredPackageFile>>(StringComparer.OrdinalIgnoreCase);
 
         var searchDirs = projectSearchDirs ?? new[] { "src", "packages" };
 
@@ -175,6 +181,7 @@ public static class SbomGenerator
                 continue;
             }
             scannedProjectDirs.Add(project.Parent);
+            AddRestoredPackageFiles(project, baseIntermediateOutputPath, restoredPackageFiles);
 
             var tempBom = outputDirectory / $"_{projectId}.tmp.json";
             // Tool quotes each interpolated value. A combined optional fragment becomes one invalid argument.
@@ -211,7 +218,53 @@ public static class SbomGenerator
             }
         }
 
-        return merged is null ? null : new ConstituentScan(merged, seenComponentKeys, scannedProjectDirs);
+        return merged is null
+            ? null
+            : new ConstituentScan(merged, seenComponentKeys, scannedProjectDirs, restoredPackageFiles);
+    }
+
+    // Indexes the files of each restored package by file name. The assets file is read from -biop
+    // if given, else obj/. A project without an assets file adds nothing.
+    static void AddRestoredPackageFiles(AbsolutePath project, AbsolutePath? baseIntermediateOutputPath,
+        Dictionary<string, List<RestoredPackageFile>> index)
+    {
+        var projectName = Path.GetFileNameWithoutExtension(project);
+        var assetsFile = new[]
+            {
+                baseIntermediateOutputPath is null ? null : baseIntermediateOutputPath / projectName / "project.assets.json",
+                project.Parent / "obj" / "project.assets.json",
+            }
+            .FirstOrDefault(f => f is not null && f.FileExists());
+        if (assetsFile is null)
+            return;
+
+        var assets = JsonNode.Parse(File.ReadAllText(assetsFile))!.AsObject();
+        var packageFolders = (assets["packageFolders"]?.AsObject() ?? new JsonObject())
+            .Select(f => (AbsolutePath)f.Key)
+            .ToList();
+
+        foreach (var (key, library) in assets["libraries"]?.AsObject() ?? new JsonObject())
+        {
+            if (library?["type"]?.GetValue<string>() != "package"
+                || library["path"]?.GetValue<string>() is not { } libraryPath)
+                continue;
+
+            var packageId = key[..key.IndexOf('/')];
+            var packageDir = packageFolders
+                .Select(folder => folder / libraryPath)
+                .FirstOrDefault(dir => dir.DirectoryExists());
+            if (packageDir is null)
+                continue;
+
+            foreach (var file in library["files"]?.AsArray() ?? new JsonArray())
+            {
+                var relativePath = file!.GetValue<string>();
+                var name = Path.GetFileName(relativePath);
+                if (!index.TryGetValue(name, out var copies))
+                    index[name] = copies = new List<RestoredPackageFile>();
+                copies.Add(new RestoredPackageFile(packageId, packageDir / relativePath));
+            }
+        }
     }
 
     static void FinalizeAndEmit(ConstituentScan scan, PackageMetadata? meta, Func<IPackageReader>? openContent,
@@ -238,7 +291,7 @@ public static class SbomGenerator
                 : constituentProjectIds.Concat(additionalProductNames).ToList();
             using var content = openContent();
             AddPackageContentComponents(merged, seenComponentKeys, content, packageId,
-                productNames, meta);
+                productNames, meta, scan.RestoredPackageFiles);
         }
 
         // cyclonedx-dotnet can leave edges to excluded development dependencies. Remove these invalid edges.
@@ -670,7 +723,8 @@ public static class SbomGenerator
     // Records shipped binaries as a CycloneDX assembly, not as dependencies. Flat components keep
     // their SHA-512 hashes visible to tools that ignore nested components.
     static void AddPackageContentComponents(JsonObject merged, HashSet<string> seenComponentKeys,
-        IPackageReader content, string packageId, IReadOnlyList<string> firstPartyNames, PackageMetadata meta)
+        IPackageReader content, string packageId, IReadOnlyList<string> firstPartyNames, PackageMetadata meta,
+        Dictionary<string, List<RestoredPackageFile>> restoredPackageFiles)
     {
         var productNames = new HashSet<string>(firstPartyNames, StringComparer.OrdinalIgnoreCase) { packageId };
         var representedNames = (merged["components"]?.AsArray() ?? new JsonArray())
@@ -702,6 +756,14 @@ public static class SbomGenerator
             if (assemblyName is not null && representedNames.Contains(simpleName))
                 continue;
 
+            var hash = SHA512.HashData(bytes);
+
+            // A binary can have a different name from its package, such as Humanizer.dll from
+            // Humanizer.Core. It is accounted for if a represented package holds the identical file.
+            // A same-named file with different bytes is still flagged.
+            if (IsFromRepresentedPackage(path, hash, restoredPackageFiles, representedNames))
+                continue;
+
             var isProduct = productNames.Contains(simpleName)
                 || simpleName.StartsWith("Avalonia.", StringComparison.OrdinalIgnoreCase)
                 || simpleName.StartsWith("AvaloniaUI.", StringComparison.OrdinalIgnoreCase)
@@ -729,7 +791,7 @@ public static class SbomGenerator
                 ["hashes"] = new JsonArray(new JsonObject
                 {
                     ["alg"] = "SHA-512",
-                    ["content"] = Convert.ToHexString(SHA512.HashData(bytes))
+                    ["content"] = Convert.ToHexString(hash)
                 }),
                 ["properties"] = new JsonArray(new JsonObject
                 {
@@ -765,6 +827,18 @@ public static class SbomGenerator
                 ["assemblies"] = assemblies
             });
         }
+    }
+
+    static bool IsFromRepresentedPackage(string shippedPath, byte[] shippedHash,
+        Dictionary<string, List<RestoredPackageFile>> restoredPackageFiles, HashSet<string?> representedNames)
+    {
+        if (!restoredPackageFiles.TryGetValue(Path.GetFileName(shippedPath), out var copies))
+            return false;
+
+        return copies.Any(copy =>
+            representedNames.Contains(copy.PackageId)
+            && copy.Path.FileExists()
+            && SHA512.HashData(File.ReadAllBytes(copy.Path)).AsSpan().SequenceEqual(shippedHash));
     }
 
     // NativeAOT tool packages contain the macOS .app bundle in a nested .zip file.
