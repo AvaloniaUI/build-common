@@ -326,8 +326,10 @@ public static class SbomGenerator
     {
         XNamespace ns = "http://schemas.openxmlformats.org/package/2006/content-types";
 
+        // Allow for both with and without a leading '.' (VSCE includes them, NuGet doesn't)
         var alreadyRegistered = doc.Root!.Elements(ns + "Default")
-            .Any(d => string.Equals((string?)d.Attribute("Extension"), "json", StringComparison.OrdinalIgnoreCase));
+            .Any(d => string.Equals(
+                ((string?)d.Attribute("Extension"))?.TrimStart('.'), "json", StringComparison.OrdinalIgnoreCase));
         if (alreadyRegistered)
             return false;
 
