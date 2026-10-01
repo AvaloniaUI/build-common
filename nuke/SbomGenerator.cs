@@ -224,18 +224,15 @@ public static class SbomGenerator
     }
 
     // Indexes the files of each restored package by file name. The assets file is read from -biop
-    // if given, else obj/. A project without an assets file adds nothing.
+    // if given, else obj/, never both. A project without an assets file adds nothing.
     static void AddRestoredPackageFiles(AbsolutePath project, AbsolutePath? baseIntermediateOutputPath,
         Dictionary<string, List<RestoredPackageFile>> index)
     {
         var projectName = Path.GetFileNameWithoutExtension(project);
-        var assetsFile = new[]
-            {
-                baseIntermediateOutputPath is null ? null : baseIntermediateOutputPath / projectName / "project.assets.json",
-                project.Parent / "obj" / "project.assets.json",
-            }
-            .FirstOrDefault(f => f is not null && f.FileExists());
-        if (assetsFile is null)
+        var assetsFile = baseIntermediateOutputPath is null
+            ? project.Parent / "obj" / "project.assets.json"
+            : baseIntermediateOutputPath / projectName / "project.assets.json";
+        if (!assetsFile.FileExists())
             return;
 
         var assets = JsonNode.Parse(File.ReadAllText(assetsFile))!.AsObject();
@@ -753,7 +750,9 @@ public static class SbomGenerator
                 && simpleName.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            if (assemblyName is not null && representedNames.Contains(simpleName))
+            // Name-only matching is the fallback when no restored package file of this name is indexed.
+            if (assemblyName is not null && representedNames.Contains(simpleName)
+                && !PackageContainsFileNamed(simpleName, path, restoredPackageFiles))
                 continue;
 
             var hash = SHA512.HashData(bytes);
@@ -827,6 +826,13 @@ public static class SbomGenerator
                 ["assemblies"] = assemblies
             });
         }
+    }
+
+    static bool PackageContainsFileNamed(string packageId, string shippedPath,
+        Dictionary<string, List<RestoredPackageFile>> restoredPackageFiles)
+    {
+        return restoredPackageFiles.TryGetValue(Path.GetFileName(shippedPath), out var copies)
+            && copies.Any(copy => copy.PackageId.Equals(packageId, StringComparison.OrdinalIgnoreCase));
     }
 
     static bool IsFromRepresentedPackage(string shippedPath, byte[] shippedHash,
