@@ -59,25 +59,33 @@ public class NugetCache
         }
     }
 
-    public static void InstallNetTool(string packageId, string version, string packagesDirectory)
+    public static void InstallNetTool(string packageId, string version, string packagesDirectory,
+        IReadOnlyList<string>? toolsToUninstall = null)
     {
-        try
+        foreach (var toolToUninstall in toolsToUninstall ?? [packageId])
         {
-            DotNetTasks.DotNetToolUninstall(c => c
-                .SetGlobal(true)
-                .SetPackageName(packageId));
-        }
-        catch
-        {
-            // The tool can be absent.
+            try
+            {
+                DotNetTasks.DotNetToolUninstall(c => c
+                    .SetGlobal(true)
+                    // Log both stdout and stderr as info, we don't care about errors here.
+                    .SetProcessLogger((_, m) => Log.Information(m))
+                    .SetPackageName(toolToUninstall));
+            }
+            catch
+            {
+                // The tool can be absent.
+            }
         }
 
         DotNetTasks.DotNetToolInstall(c => c
             .SetGlobal(true)
             .SetPackageName(packageId)
-            .AddSources(packagesDirectory)
             .SetVersion(version)
-            .SetProcessAdditionalArguments("--ignore-failed-sources", "--no-cache"));
+            .SetProcessAdditionalArguments(
+                "--ignore-failed-sources", "--no-cache",
+                // Must not use "--add-source" to avoid confclits with nuget.config.
+                "--source", packagesDirectory));
         Log.Information("Installed {PackageId}", packageId);
     }
 }
