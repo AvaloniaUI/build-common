@@ -60,6 +60,12 @@ on:
         required: false
         type: string
         default: 10.0.204
+        description: "Exact SDK version. Ignored when global_json_file is set."
+      global_json_file:
+        required: false
+        type: string
+        default: ""
+        description: "Path to a global.json to take the SDK from instead of dotnet_sdk; its rollForward picks the latest allowed SDK."
       environment:
         required: false
         type: string
@@ -120,12 +126,19 @@ jobs:
           submodules: 'recursive'
 
     - uses: actions/setup-dotnet@v4
+      if: ${{ inputs.global_json_file == '' }}
       with:
           dotnet-version: ${{ inputs.dotnet_sdk }}
 
+    # v5 is the first setup-dotnet that honours global.json's latest* rollForward policies.
+    - uses: actions/setup-dotnet@v5
+      if: ${{ inputs.global_json_file != '' }}
+      with:
+          global-json-file: ${{ inputs.global_json_file }}
+
     - name: Install workloads
       if: ${{ inputs.install_workloads && inputs.install_workloads != '' }}
-      run: dotnet workload install ${{ inputs.install_workloads }} --version ${{ inputs.dotnet_sdk }}
+      run: dotnet workload install ${{ inputs.install_workloads }} ${{ inputs.global_json_file == '' && format('--version {0}', inputs.dotnet_sdk) || '' }}
 
     - name: Create NuGet Packages
       run: dotnet run --project ${{github.workspace}}/${{ inputs.nuke_project }} -- --target ${{ inputs.nuke_target }} --configuration ${{ inputs.configuration }} --output ${{github.workspace}}/artifacts/packages/
