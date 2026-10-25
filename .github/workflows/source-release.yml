@@ -129,14 +129,14 @@ jobs:
             dir_name: ${{ steps.version.outputs.dir_name }}
         steps:
             - name: Checkout
-              uses: actions/checkout@v4
+              uses: actions/checkout@v7
               with:
                   submodules: recursive
                   token: ${{ secrets.checkout_token != '' && secrets.checkout_token || github.token }}
                   ref: ${{ inputs.ref }}
 
             - name: Setup .NET
-              uses: actions/setup-dotnet@v4
+              uses: actions/setup-dotnet@v6
               with:
                   dotnet-version: ${{ inputs.dotnet_sdk }}
 
@@ -263,7 +263,7 @@ jobs:
                   ls -la "${RUNNER_TEMP}/${{ steps.version.outputs.zip_name }}"
 
             - name: Upload zip artifact
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: source-zip
                   path: ${{ runner.temp }}/${{ steps.version.outputs.zip_name }}
@@ -275,7 +275,7 @@ jobs:
         runs-on: ${{ inputs.runs_on }}
         steps:
             - name: Setup .NET
-              uses: actions/setup-dotnet@v4
+              uses: actions/setup-dotnet@v6
               with:
                   dotnet-version: ${{ inputs.dotnet_sdk }}
 
@@ -285,7 +285,7 @@ jobs:
               run: dotnet workload install ${{ inputs.install_workloads }}
 
             - name: Download source zip
-              uses: actions/download-artifact@v4
+              uses: actions/download-artifact@v8
               with:
                   name: source-zip
                   path: ${{ runner.temp }}/zip
@@ -337,7 +337,7 @@ jobs:
                   fi
 
             - name: Download source zip
-              uses: actions/download-artifact@v4
+              uses: actions/download-artifact@v8
               with:
                   name: source-zip
                   path: ${{ runner.temp }}/zip

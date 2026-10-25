@@ -42,7 +42,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-dotnet@v4
+    - uses: actions/setup-dotnet@v6
       with:
         dotnet-version: ${{ inputs.dotnet_sdk }}
 
@@ -59,14 +59,14 @@ runs:
           --configuration ${{ inputs.configuration }} `
           --output "${{ github.workspace }}/${{ inputs.output_path }}/"
 
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.artifact_name }}
         path: ${{ github.workspace }}/${{ inputs.output_path }}/${{ inputs.artifact_glob }}
         retention-days: ${{ inputs.artifact_retention_days }}
 
     - name: Upload SBOM artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: sbom
         path: ${{ github.workspace }}/artifacts/sbom/*.cdx.json

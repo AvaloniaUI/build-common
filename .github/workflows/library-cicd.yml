@@ -120,20 +120,15 @@ jobs:
           [ -z "$line" ] && continue
           echo "$line" >> "$GITHUB_ENV"
         done <<< "$ENV_STRING"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
           token: ${{ secrets.checkout_token != '' && secrets.checkout_token || github.token }}
           submodules: 'recursive'
 
-    - uses: actions/setup-dotnet@v4
-      if: ${{ inputs.global_json_file == '' }}
+    # setup-dotnet installs both when given both, so dotnet_sdk is dropped when global_json_file is set.
+    - uses: actions/setup-dotnet@v6
       with:
-          dotnet-version: ${{ inputs.dotnet_sdk }}
-
-    # v5 is the first setup-dotnet that honours global.json's latest* rollForward policies.
-    - uses: actions/setup-dotnet@v5
-      if: ${{ inputs.global_json_file != '' }}
-      with:
+          dotnet-version: ${{ inputs.global_json_file == '' && inputs.dotnet_sdk || '' }}
           global-json-file: ${{ inputs.global_json_file }}
 
     - name: Install workloads
@@ -146,14 +141,14 @@ jobs:
         BABEL_LICENSE: ${{ secrets.babel_license }}
 
     - name: Upload NuGet Artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
           name: ${{ inputs.artifact_name }}
           path: ${{github.workspace}}/artifacts/packages/${{ inputs.artifact_glob }}
           retention-days: ${{ inputs.artifact_retention_days }}
 
     - name: Upload SBOM Artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
           name: sbom
           path: ${{github.workspace}}/artifacts/sbom/*.cdx.json
@@ -169,7 +164,7 @@ jobs:
     if: ${{ inputs.push_package == 'true' || (inputs.push_package == 'auto' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref_name, 'release/'))) }}
     steps:
 
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v8
       with:
         name: ${{ inputs.artifact_name }}
         path: ./nupkgs
@@ -191,7 +186,7 @@ jobs:
           echo "version=$version" >> $GITHUB_OUTPUT
 
       - name: Create tag & release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: ${{ steps.version.outputs.version }}
