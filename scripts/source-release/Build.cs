@@ -160,14 +160,18 @@ class Build : NukeBuild
         if (!string.IsNullOrEmpty(snk))
             candidates.Add(snk);
 
-        // The -pp output lists imported files in its first comment block.
+        // The -pp output lists imported files in its first comment block. The paths are
+        // absolute in the host's own shape, so a Windows run lists a drive-rooted path where a
+        // Linux run lists one beginning with a slash: test for a rooted path rather than a
+        // leading slash, or a Windows run stages no build props at all and the zip cannot build.
         var ppFile = tempDir / $"pp-{Guid.NewGuid():N}.xml";
         RunDotnet(repoRoot, "msbuild", csproj, $"-pp:{ppFile}", $"-p:TargetFramework={tfm}", "-nologo");
         foreach (var raw in File.ReadLines(ppFile))
         {
             var line = raw.Trim();
-            if (line.StartsWith('/') && (line.EndsWith(".props", StringComparison.Ordinal)
-                                         || line.EndsWith(".targets", StringComparison.Ordinal)))
+            if ((line.EndsWith(".props", StringComparison.Ordinal)
+                 || line.EndsWith(".targets", StringComparison.Ordinal))
+                && Path.IsPathRooted(line))
                 candidates.Add(line);
         }
     }
